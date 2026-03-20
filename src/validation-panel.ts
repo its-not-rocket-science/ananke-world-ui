@@ -1,238 +1,252 @@
-// src/validation-panel.ts — Phase 5 stub: Validation Dashboard
-//
-// Runs emergent validation scenarios entirely in the browser and reports PASS/FAIL.
-// Each scenario tests a specific simulation property against an empirical expectation.
-//
-// Full scenario suite is planned in ROADMAP Phase 5.
-// Current implementation runs two lightweight smoke scenarios as a proof of concept.
-//
-// Ananke imports:
-//   - createWorld()  — build deterministic WorldState
-//   - stepWorld()    — advance simulation
-//   - q(), SCALE     — fixed-point helpers
+import { createWorld, stepWorld } from "@its-not-rocket-science/ananke";
+import { escapeHtml } from "./data.js";
+import type { PanelContext } from "./app-types.js";
+import { KERNEL_CONTEXT } from "./models.js";
 
-import {
-  createWorld,
-  stepWorld,
-  q,
-  SCALE,
-} from "@its-not-rocket-science/ananke";
-
-// KernelContext is not in the root barrel (v0.1.3); use Parameters<> to extract it.
-type KernelContext = Parameters<typeof stepWorld>[2];
-
-const CTX: KernelContext = { tractionCoeff: q(0.85) };
-
-// ── Scenario registry ─────────────────────────────────────────────────────────
-
-interface ValidationScenario {
-  id: string;
-  label: string;
-  description: string;
-  run: () => ValidationResult;
+interface TrialSummary {
+  seed: number;
+  winnerTeam: number | null;
+  duration: number;
+  casualties: number;
+  shockCurve: number[];
 }
 
-interface ValidationResult {
-  pass: boolean;
-  message: string;
-}
+let latestTrials: TrialSummary[] = [];
+let latestCsv = "";
 
-const SCENARIOS: ValidationScenario[] = [
-  {
-    id: "armour-slows-shock",
-    label: "Armour slows shock accumulation",
-    description:
-      "A fighter in plate armour should reach high shock values more slowly than an unarmoured fighter under the same attack load.",
-    run: () => runArmourVsUnarmouredShock(),
-  },
-  {
-    id: "fight-terminates",
-    label: "Fight terminates before tick limit",
-    description:
-      "A 1v1 fight between a Knight and a Pro Boxer should always produce a winner within 2000 ticks (seed 42).",
-    run: () => runFightTerminates(),
-  },
-  {
-    id: "heavier-entity-slower",
-    label: "Heavier entity reaches target slower",
-    description:
-      "A Troll (high mass) should advance fewer fixed-point distance units per tick than a Goblin (low mass) given identical commands.",
-    run: () => runHeavierEntitySlower(),
-  },
-  // TODO Phase 5: add all CALIBRATION_* scenarios from tools/validation.ts as browser-runnable variants
-];
+export function mountValidationPanel(host: HTMLElement, context: PanelContext): void {
+  const render = () => {
+    const state = context.getState();
+    const options = state.entities
+      .map((entity) => `<option value="${escapeHtml(entity.id)}">${escapeHtml(entity.label)}</option>`)
+      .join("");
 
-// ── Scenario implementations ──────────────────────────────────────────────────
+    host.innerHTML = `
+      <section class="panel-shell">
+        <div class="panel-header">
+          <div>
+            <h2>Dashboard</h2>
+            <p class="subtitle">Batch the current roster over many seeds to estimate win rates, casualty distributions, survival duration, and average shock progression.</p>
+          </div>
+          <div class="header-actions">
+            <button class="primary" id="db-run">Run dashboard batch</button>
+            <button id="db-copy-csv">Copy CSV</button>
+          </div>
+        </div>
 
-function runArmourVsUnarmouredShock(): ValidationResult {
-  // Run two 200-tick worlds; count ticks until entity 1 hits shock > 0.5 * SCALE.Q
-  const TICK_LIMIT = 200;
-  const SHOCK_THRESHOLD = q(0.50);
+        <div class="dashboard-layout">
+          <div class="stack-lg">
+            <div class="card">
+              <h3>Batch setup</h3>
+              <div class="three-up">
+                <label><span>Trials</span><input id="db-trials" type="number" value="${state.dashboard.trials}" /></label>
+                <label><span>Max ticks</span><input id="db-max-ticks" type="number" value="${state.dashboard.maxTicks}" /></label>
+                <label><span>Team A entity</span><select id="db-team-a">${options}</select></label>
+                <label><span>Team B entity</span><select id="db-team-b">${options}</select></label>
+              </div>
+              <p class="hint">Each trial rebuilds the world with a new seed while keeping the chosen roster loadouts stable.</p>
+            </div>
 
-  const worldArmed = createWorld(42, [
-    { id: 1, teamId: 1, seed: 1, archetype: "KNIGHT_INFANTRY", weaponId: "longsword", armourId: "plate_armour" },
-    { id: 2, teamId: 2, seed: 2, archetype: "PRO_BOXER",       weaponId: "fist" },
-  ]);
-  const worldUnarmoured = createWorld(42, [
-    { id: 1, teamId: 1, seed: 1, archetype: "HUMAN_BASE", weaponId: "longsword" },
-    { id: 2, teamId: 2, seed: 2, archetype: "PRO_BOXER",  weaponId: "fist" },
-  ]);
+            <div class="card">
+              <h3>Win rate by faction</h3>
+              ${renderBarChart(latestTrials)}
+            </div>
 
-  let tickArmed = TICK_LIMIT;
-  let tickUnarmoured = TICK_LIMIT;
+            <div class="card">
+              <h3>Casualty distribution</h3>
+              ${renderHistogram(latestTrials)}
+            </div>
+          </div>
 
-  for (let t = 0; t < TICK_LIMIT; t++) {
-    stepWorld(worldArmed, new Map(), CTX);
-    const e = worldArmed.entities.find(en => en.id === 1);
-    if (e && e.injury.shock > SHOCK_THRESHOLD && tickArmed === TICK_LIMIT) {
-      tickArmed = t;
-    }
-  }
+          <div class="stack-lg">
+            <div class="card">
+              <h3>Survival curves</h3>
+              ${renderSurvivalCurve(latestTrials)}
+            </div>
+            <div class="card">
+              <h3>Shock progression</h3>
+              ${renderShockCurve(latestTrials)}
+            </div>
+            <div class="card">
+              <h3>CSV export</h3>
+              <textarea class="json-output" readonly>${escapeHtml(latestCsv || "Run the dashboard to produce a CSV export.")}</textarea>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
 
-  for (let t = 0; t < TICK_LIMIT; t++) {
-    stepWorld(worldUnarmoured, new Map(), CTX);
-    const e = worldUnarmoured.entities.find(en => en.id === 1);
-    if (e && e.injury.shock > SHOCK_THRESHOLD && tickUnarmoured === TICK_LIMIT) {
-      tickUnarmoured = t;
-    }
-  }
+    const teamASelect = host.querySelector<HTMLSelectElement>("#db-team-a");
+    const teamBSelect = host.querySelector<HTMLSelectElement>("#db-team-b");
+    if (teamASelect) teamASelect.value = state.dashboard.teamA[0] ?? state.entities[0]?.id ?? "";
+    if (teamBSelect) teamBSelect.value = state.dashboard.teamB[0] ?? state.entities[1]?.id ?? state.entities[0]?.id ?? "";
 
-  const pass = tickArmed >= tickUnarmoured;
-  return {
-    pass,
-    message: `Armed entity hit shock threshold at tick ${tickArmed}, unarmoured at tick ${tickUnarmoured}. ` +
-      (pass ? "Armour delay confirmed." : "FAIL: armour did not delay shock accumulation."),
+    host.querySelector("#db-run")?.addEventListener("click", async () => {
+      context.updateState((current) => {
+        current.dashboard.trials = numberValue(host, "#db-trials", current.dashboard.trials);
+        current.dashboard.maxTicks = numberValue(host, "#db-max-ticks", current.dashboard.maxTicks);
+        current.dashboard.teamA = [stringValue(host, "#db-team-a", current.dashboard.teamA[0] ?? "")];
+        current.dashboard.teamB = [stringValue(host, "#db-team-b", current.dashboard.teamB[0] ?? "")];
+      });
+      latestTrials = runDashboardTrials(context);
+      latestCsv = toCsv(latestTrials);
+      render();
+    });
+
+    host.querySelector("#db-copy-csv")?.addEventListener("click", async () => {
+      if (!latestCsv) return;
+      await navigator.clipboard.writeText(latestCsv);
+    });
   };
+
+  render();
 }
 
-function runFightTerminates(): ValidationResult {
-  const MAX_TICKS = 2000;
-  const world = createWorld(42, [
-    { id: 1, teamId: 1, seed: 1, archetype: "KNIGHT_INFANTRY", weaponId: "longsword", armourId: "plate_armour" },
-    { id: 2, teamId: 2, seed: 2, archetype: "PRO_BOXER",       weaponId: "fist" },
-  ]);
+function runDashboardTrials(context: PanelContext): TrialSummary[] {
+  const state = context.getState();
+  const entityA = state.entities.find((entity) => entity.id === state.dashboard.teamA[0]);
+  const entityB = state.entities.find((entity) => entity.id === state.dashboard.teamB[0]);
+  if (!entityA || !entityB) return [];
 
-  for (let t = 0; t < MAX_TICKS; t++) {
-    stepWorld(world, new Map(), CTX);
-    for (const entity of world.entities) {
-      if (entity.injury.dead || entity.injury.consciousness < 0.2) {
-        return {
-          pass: true,
-          message: `Fight ended at tick ${t} — entity ${entity.id} went down.`,
-        };
+  const results: TrialSummary[] = [];
+  for (let trial = 0; trial < state.dashboard.trials; trial++) {
+    const seed = state.world.seed + trial;
+    const world = createWorld(seed, [
+      toEntitySpec(entityA, 1, trial),
+      toEntitySpec(entityB, 2, trial),
+    ]);
+
+    const shockCurve: number[] = [];
+    let duration = state.dashboard.maxTicks;
+    let winnerTeam: number | null = null;
+    for (let tick = 0; tick < state.dashboard.maxTicks; tick++) {
+      stepWorld(world, new Map(), KERNEL_CONTEXT);
+      const alive = world.entities.filter((entity) => !entity.injury.dead && entity.injury.consciousness >= 2000);
+      shockCurve.push(world.entities.reduce((sum, entity) => sum + entity.injury.shock, 0) / world.entities.length);
+      if (alive.length === 1) {
+        duration = tick + 1;
+        winnerTeam = alive[0]?.teamId ?? null;
+        break;
       }
     }
+    const casualties = world.entities.filter((entity) => entity.injury.dead || entity.injury.consciousness < 2000).length;
+    results.push({ seed, winnerTeam, duration, casualties, shockCurve });
   }
 
-  return {
-    pass: false,
-    message: `Fight did not terminate within ${MAX_TICKS} ticks.`,
-  };
+  return results;
 }
 
-function runHeavierEntitySlower(): ValidationResult {
-  // One step with move-forward command; compare x displacement
-  const trollWorld  = createWorld(1, [{ id: 1, teamId: 1, seed: 1, archetype: "TROLL",  weaponId: "fist" }]);
-  const goblinWorld = createWorld(1, [{ id: 1, teamId: 1, seed: 1, archetype: "GOBLIN", weaponId: "fist" }]);
+function toCsv(trials: TrialSummary[]): string {
+  const rows = ["seed,winnerTeam,duration,casualties,meanShock"];
+  for (const trial of trials) {
+    const meanShock = trial.shockCurve.length === 0 ? 0 : trial.shockCurve.reduce((sum, value) => sum + value, 0) / trial.shockCurve.length;
+    rows.push(`${trial.seed},${trial.winnerTeam ?? "draw"},${trial.duration},${trial.casualties},${meanShock.toFixed(2)}`);
+  }
+  return rows.join("\n");
+}
 
-  // Record starting position
-  const trollStart  = trollWorld.entities.find(e => e.id === 1)?.position_m.x  ?? 0;
-  const goblinStart = goblinWorld.entities.find(e => e.id === 1)?.position_m.x ?? 0;
-
-  const STEPS = 50;
-  for (let t = 0; t < STEPS; t++) {
-    stepWorld(trollWorld,  new Map(), CTX);
-    stepWorld(goblinWorld, new Map(), CTX);
+function renderBarChart(trials: TrialSummary[]): string {
+  if (trials.length === 0) {
+    return `<p class="empty-state">Run a batch to see win rates.</p>`;
   }
 
-  const trollDist  = Math.abs((trollWorld.entities.find(e => e.id === 1)?.position_m.x  ?? 0) - trollStart);
-  const goblinDist = Math.abs((goblinWorld.entities.find(e => e.id === 1)?.position_m.x ?? 0) - goblinStart);
-
-  // In a purely autonomous 1-entity world both entities may not move (no target).
-  // The test verifies neither crashes and both entities are still alive.
-  const trollAlive  = trollWorld.entities.find(e => e.id === 1)  !== undefined;
-  const goblinAlive = goblinWorld.entities.find(e => e.id === 1) !== undefined;
-  const pass = trollAlive && goblinAlive;
-
-  return {
-    pass,
-    message:
-      `Troll moved ${trollDist} fixed-point units, Goblin moved ${goblinDist} in ${STEPS} ticks. ` +
-      (pass
-        ? "Both entities remained alive (autonomous-no-target test)."
-        : "FAIL: one or both entities missing from world."),
-  };
+  const team1Wins = trials.filter((trial) => trial.winnerTeam === 1).length;
+  const team2Wins = trials.filter((trial) => trial.winnerTeam === 2).length;
+  const draws = trials.length - team1Wins - team2Wins;
+  const max = Math.max(team1Wins, team2Wins, draws, 1);
+  return renderSimpleBars([
+    { label: "Team 1", value: team1Wins, color: "#8b5cf6", max },
+    { label: "Team 2", value: team2Wins, color: "#14b8a6", max },
+    { label: "Draw", value: draws, color: "#64748b", max },
+  ]);
 }
 
-// ── UI rendering ──────────────────────────────────────────────────────────────
+function renderHistogram(trials: TrialSummary[]): string {
+  if (trials.length === 0) {
+    return `<p class="empty-state">Run a batch to see casualty counts.</p>`;
+  }
 
-export function mountValidationPanel(host: HTMLElement): void {
-  const rows = SCENARIOS.map(
-    (s) => `
-    <tr id="vp-row-${s.id}">
-      <td style="padding:0.4rem 0.5rem;font-size:0.82rem;color:#94a3b8">${s.label}</td>
-      <td style="padding:0.4rem 0.5rem">
-        <span id="vp-status-${s.id}" style="font-size:0.78rem;color:#64748b">—</span>
-      </td>
-      <td style="padding:0.4rem 0.5rem;font-size:0.75rem;color:#64748b" id="vp-msg-${s.id}">
-        ${s.description}
-      </td>
-    </tr>`,
-  ).join("\n");
+  const counts = new Map<number, number>();
+  for (const trial of trials) {
+    counts.set(trial.casualties, (counts.get(trial.casualties) ?? 0) + 1);
+  }
+  const max = Math.max(...counts.values(), 1);
+  return renderSimpleBars(
+    [...counts.entries()].sort((a, b) => a[0] - b[0]).map(([casualties, value]) => ({
+      label: `${casualties} down`,
+      value,
+      color: "#f97316",
+      max,
+    })),
+  );
+}
 
-  host.innerHTML = `
-    <h2>Validation Dashboard</h2>
-    <p class="subtitle">
-      Run emergent validation scenarios in the browser.
-      All scenarios use only the @its-not-rocket-science/ananke ESM package — no server required.
-    </p>
+function renderSurvivalCurve(trials: TrialSummary[]): string {
+  if (trials.length === 0) {
+    return `<p class="empty-state">Run a batch to see survival curves.</p>`;
+  }
 
-    <div class="card" style="max-width:800px">
-      <button class="primary" id="vp-run-all">Run All Scenarios</button>
+  const maxDuration = Math.max(...trials.map((trial) => trial.duration), 1);
+  const points = trials
+    .map((trial, index) => {
+      const x = (index / Math.max(trials.length - 1, 1)) * 320;
+      const y = 160 - (trial.duration / maxDuration) * 140;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return `<svg viewBox="0 0 340 180" class="chart-svg"><polyline fill="none" stroke="#38bdf8" stroke-width="3" points="${points}" /></svg>`;
+}
 
-      <table style="width:100%;border-collapse:collapse;margin-top:1rem">
-        <thead>
-          <tr style="border-bottom:1px solid #2d3148">
-            <th style="text-align:left;padding:0.4rem 0.5rem;font-size:0.75rem;color:#64748b">Scenario</th>
-            <th style="text-align:left;padding:0.4rem 0.5rem;font-size:0.75rem;color:#64748b">Status</th>
-            <th style="text-align:left;padding:0.4rem 0.5rem;font-size:0.75rem;color:#64748b">Detail</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
+function renderShockCurve(trials: TrialSummary[]): string {
+  if (trials.length === 0) {
+    return `<p class="empty-state">Run a batch to see mean shock over time.</p>`;
+  }
 
-      <!-- TODO Phase 5: add all CALIBRATION_* scenarios from the validation framework -->
-      <!-- TODO Phase 5: show aggregate pass/fail counts and overall result badge      -->
+  const maxLength = Math.max(...trials.map((trial) => trial.shockCurve.length), 1);
+  const averages = Array.from({ length: maxLength }, (_, index) => {
+    const values = trials.map((trial) => trial.shockCurve[index]).filter((value): value is number => typeof value === "number");
+    if (values.length === 0) return 0;
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+  });
+  const maxShock = Math.max(...averages, 1);
+  const points = averages
+    .map((value, index) => `${((index / Math.max(maxLength - 1, 1)) * 320).toFixed(1)},${(160 - (value / maxShock) * 140).toFixed(1)}`)
+    .join(" ");
+  return `<svg viewBox="0 0 340 180" class="chart-svg"><polyline fill="none" stroke="#a78bfa" stroke-width="3" points="${points}" /></svg>`;
+}
+
+function renderSimpleBars(bars: Array<{ label: string; value: number; color: string; max: number }>): string {
+  return `
+    <div class="bar-stack">
+      ${bars
+        .map(
+          (bar) => `
+            <div class="bar-row">
+              <span>${escapeHtml(bar.label)}</span>
+              <div class="bar-track"><div class="bar-fill" style="width:${(bar.value / Math.max(bar.max, 1)) * 100}%;background:${escapeHtml(bar.color)}"></div></div>
+              <strong>${bar.value}</strong>
+            </div>`,
+        )
+        .join("")}
     </div>
   `;
-
-  host.querySelector("#vp-run-all")?.addEventListener("click", () => {
-    runAllScenarios(host);
-  });
 }
 
-function runAllScenarios(host: HTMLElement): void {
-  for (const scenario of SCENARIOS) {
-    const statusEl = host.querySelector<HTMLElement>(`#vp-status-${scenario.id}`);
-    const msgEl    = host.querySelector<HTMLElement>(`#vp-msg-${scenario.id}`);
-    if (statusEl) statusEl.textContent = "Running…";
+function stringValue(host: HTMLElement, selector: string, fallback: string): string {
+  return (host.querySelector<HTMLInputElement | HTMLSelectElement>(selector)?.value ?? fallback).trim();
+}
 
-    // Run each scenario in a setTimeout to allow the UI to update between them
-    setTimeout(() => {
-      try {
-        const result = scenario.run();
-        if (statusEl) {
-          statusEl.textContent = result.pass ? "PASS" : "FAIL";
-          statusEl.style.color = result.pass ? "#4ade80" : "#f87171";
-        }
-        if (msgEl) msgEl.textContent = result.message;
-      } catch (err) {
-        if (statusEl) {
-          statusEl.textContent = "ERROR";
-          statusEl.style.color = "#f97316";
-        }
-        if (msgEl) msgEl.textContent = err instanceof Error ? err.message : String(err);
-      }
-    }, 0);
-  }
+function numberValue(host: HTMLElement, selector: string, fallback: number): number {
+  return Number.parseInt(stringValue(host, selector, String(fallback)), 10) || fallback;
+}
+
+function toEntitySpec(entity: { seed: number; archetype: string; weaponId?: string; armourId?: string }, teamId: number, trial: number) {
+  return {
+    id: teamId,
+    teamId,
+    seed: entity.seed + trial,
+    archetype: entity.archetype,
+    weaponId: entity.weaponId ?? "wpn_boxing_gloves",
+    ...(entity.armourId ? { armourId: entity.armourId } : {}),
+  };
 }

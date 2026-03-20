@@ -1,170 +1,446 @@
-// src/world-simulator.ts — Phase 3 stub: World Simulator
-//
-// Lets users set up polities, run stepPolityDay loops, and view final state.
-// Full territory map and visual rendering are planned for ROADMAP Phase 3.
-//
-// Ananke imports:
-//   - createPolity()        — build a Polity from spec
-//   - createPolityRegistry() — wrap polities in a registry
-//   - stepPolityDay()       — advance one simulated day
-//   - PolityRegistry, Polity, PolityPair
+import { ReplayRecorder, createWorld, serializeReplay, stepWorld } from "@its-not-rocket-science/ananke";
+import { createPreviewRenderer, type PreviewRenderer } from "./bridge/three-preview.js";
+import { escapeHtml } from "./data.js";
+import type { PanelContext } from "./app-types.js";
+import { KERNEL_CONTEXT } from "./models.js";
+import { OptionalWorldServerAdapter } from "./world-server-adapter.js";
 
-import {
-  createPolity,
-  createPolityRegistry,
-  stepPolityDay,
-} from "@its-not-rocket-science/ananke/polity";
-import type { PolityRegistry } from "@its-not-rocket-science/ananke/polity";
-import { q } from "@its-not-rocket-science/ananke";
+const SPEED_OPTIONS = [0.5, 1, 5, 20];
 
-// TechEra.Medieval = 2 (numeric era code from src/sim/tech.ts)
-const TECH_ERA_MEDIEVAL = 2 as const;
+type WorldState = ReturnType<typeof createWorld>;
 
-const DEFAULT_DAYS = 30;
+interface SimulationSession {
+  world: WorldState;
+  recorder: ReplayRecorder;
+  log: string[];
+  selectedEntityId: number | null;
+  pendingCommands: Map<number, readonly CommandLike[]>;
+}
 
-export function mountWorldSimulator(host: HTMLElement): void {
-  host.innerHTML = `
-    <h2>World Simulator</h2>
-    <p class="subtitle">
-      Configure two polities, run a ${DEFAULT_DAYS}-day simulation, and see the outcome.
-      Phase 3 — territory map visualization is not yet implemented.
-    </p>
+interface CommandLike {
+  kind: string;
+  targetId?: number;
+  dir?: { x: number; y: number; z: number };
+  intensity?: number;
+  mode?: string;
+}
 
-    <div class="card">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
-        <div>
-          <label>Polity A — Name</label>
-          <input type="text" id="ws-name-a" value="Kingdom of Aldenmoor" />
-          <label>Polity A — Population</label>
-          <input type="number" id="ws-pop-a" value="5000" />
-          <label>Polity A — Starting Treasury (cu)</label>
-          <input type="number" id="ws-treasury-a" value="2000" />
+let activeSession: SimulationSession | null = null;
+let runTimer: number | null = null;
+let previewRendererPromise: Promise<PreviewRenderer> | null = null;
+let previewRenderer: PreviewRenderer | null = null;
+const worldServer = new OptionalWorldServerAdapter();
+let worldServerModeMessage = "Multiplayer adapter idle.";
+let worldServerSessionId = "";
+
+export function mountWorldSimulator(host: HTMLElement, context: PanelContext): void {
+  const render = async () => {
+    const state = context.getState();
+    const availableEntities = state.entities;
+    const selected = availableEntities.filter((entity) => state.sim.selectedEntityIds.includes(entity.id));
+    const session = activeSession;
+    const rows = session
+      ? session.world.entities
+          .map(
+            (entity) => `
+              <tr class="${entity.id === session.selectedEntityId ? "is-selected-row" : ""}" data-entity-id="${entity.id}">
+                <td>#${entity.id}</td>
+                <td>Team ${entity.teamId}</td>
+                <td>${entity.position_m.x}, ${entity.position_m.y}</td>
+                <td>${entity.injury.shock.toFixed(0)}</td>
+                <td>${entity.injury.consciousness.toFixed(0)}</td>
+                <td>${entity.injury.dead ? "dead" : "active"}</td>
+              </tr>`,
+          )
+          .join("")
+      : `<tr><td colspan="6" class="empty-cell">No active simulation yet.</td></tr>`;
+
+    host.innerHTML = `
+      <section class="panel-shell">
+        <div class="panel-header">
+          <div>
+            <h2>Sim Runner</h2>
+            <p class="subtitle">Run the Ananke tick loop, dispatch manual commands, inspect entity state live, and persist a replay that the replay viewer can scrub later.</p>
+          </div>
+          <div class="header-actions">
+            <button class="primary" id="sr-build-world">Build session</button>
+            <button id="sr-open-replay">Open latest replay</button>
+          </div>
         </div>
-        <div>
-          <label>Polity B — Name</label>
-          <input type="text" id="ws-name-b" value="Free City of Vareth" />
-          <label>Polity B — Population</label>
-          <input type="number" id="ws-pop-b" value="3000" />
-          <label>Polity B — Starting Treasury (cu)</label>
-          <input type="number" id="ws-treasury-b" value="4000" />
+
+        <div class="dashboard-layout">
+          <div class="stack-lg">
+            <div class="card">
+              <h3>Scenario setup</h3>
+              <div class="three-up">
+                <label><span>World seed</span><input id="sr-seed" type="number" value="${state.world.seed}" /></label>
+                <label><span>Max ticks</span><input id="sr-max-ticks" type="number" value="${state.sim.maxTicks}" /></label>
+                <label><span>Speed</span>
+                  <select id="sr-speed">${SPEED_OPTIONS.map((value) => `<option value="${value}" ${state.sim.speed === value ? "selected" : ""}>${value}×</option>`).join("")}</select>
+                </label>
+              </div>
+              <div class="selection-list">
+                ${availableEntities
+                  .map(
+                    (entity) => `
+                      <label class="selection-item">
+                        <input type="checkbox" data-select-entity="${escapeHtml(entity.id)}" ${state.sim.selectedEntityIds.includes(entity.id) ? "checked" : ""} />
+                        <span>${escapeHtml(entity.label)} <em>(${escapeHtml(entity.archetype)})</em></span>
+                      </label>`,
+                  )
+                  .join("") || `<p class="empty-state">Create entities in the Entity Editor first.</p>`}
+              </div>
+              <div class="button-row">
+                <button class="primary" id="sr-start">Run / resume</button>
+                <button id="sr-pause">Pause</button>
+                <button id="sr-step">Step one tick</button>
+                <button id="sr-reset">Reset</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3>Manual command builder</h3>
+              <div class="three-up">
+                <label><span>Selected entity</span>
+                  <select id="sr-command-entity">
+                    ${(session?.world.entities ?? [])
+                      .map((entity) => `<option value="${entity.id}" ${entity.id === session?.selectedEntityId ? "selected" : ""}>#${entity.id} (Team ${entity.teamId})</option>`)
+                      .join("")}
+                  </select>
+                </label>
+                <label><span>Action</span>
+                  <select id="sr-command-kind">
+                    <option value="move">move</option>
+                    <option value="attack">attack</option>
+                    <option value="flee">flee</option>
+                  </select>
+                </label>
+                <label><span>Target entity</span>
+                  <select id="sr-command-target">
+                    ${(session?.world.entities ?? [])
+                      .map((entity) => `<option value="${entity.id}">#${entity.id}</option>`)
+                      .join("")}
+                  </select>
+                </label>
+                <label><span>Direction x,y</span><input id="sr-command-dir" type="text" value="1,0" /></label>
+                <label><span>Intensity (Q-ish)</span><input id="sr-command-intensity" type="number" value="10000" /></label>
+                <label><span>Queued commands</span><input id="sr-command-count" type="text" readonly value="${session ? countQueuedCommands(session.pendingCommands) : 0}" /></label>
+              </div>
+              <button class="primary" id="sr-queue-command">Queue command for next tick</button>
+              <p class="hint">Move uses direction vectors, attack targets the chosen entity, and flee issues a run command in the opposite direction.</p>
+            </div>
+
+            <div class="card">
+              <h3>Optional multiplayer world-server adapter</h3>
+              <div class="three-up">
+                <label><span>Mode</span>
+                  <select id="sr-multiplayer-enabled">
+                    <option value="false" ${state.world.multiplayer.enabled ? "" : "selected"}>Browser-local</option>
+                    <option value="true" ${state.world.multiplayer.enabled ? "selected" : ""}>world-server</option>
+                  </select>
+                </label>
+                <label><span>Base URL</span><input id="sr-server-base" type="text" value="${escapeHtml(state.world.multiplayer.baseUrl)}" /></label>
+                <label><span>Poll interval (ms)</span><input id="sr-server-poll" type="number" value="${state.world.multiplayer.pollMs}" /></label>
+              </div>
+              <div class="button-row">
+                <button class="primary" id="sr-server-connect">Connect adapter</button>
+                <button id="sr-server-session">Create remote session</button>
+              </div>
+              <pre class="output tight">${escapeHtml(worldServerModeMessage)}${worldServerSessionId ? `\nSession: ${worldServerSessionId}` : ""}</pre>
+            </div>
+          </div>
+
+          <div class="stack-lg">
+            <div class="card">
+              <div class="card-header-inline">
+                <h3>3D preview panel</h3>
+                <button id="sr-load-preview">Lazy-load preview</button>
+              </div>
+              <div id="sr-preview-host" class="preview-host"><p class="empty-state">Preview not loaded yet.</p></div>
+            </div>
+
+            <div class="card">
+              <h3>Live entity inspector</h3>
+              <table class="data-table compact-rows">
+                <thead><tr><th>ID</th><th>Team</th><th>Pos</th><th>Shock</th><th>Consciousness</th><th>Status</th></tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+
+            <div class="card">
+              <h3>Session log</h3>
+              <pre class="output session-log">${escapeHtml(session?.log.slice(-18).join("\n") || "Build a session to start logging ticks.")}</pre>
+            </div>
+          </div>
         </div>
-      </div>
+      </section>
+    `;
 
-      <label style="margin-top:0.5rem">Days to simulate</label>
-      <input type="number" id="ws-days" value="${DEFAULT_DAYS}" style="width:100px" />
+    bindEvents(host, context, render);
+    if (session && previewRenderer) {
+      previewRenderer.render(makePreviewPayload(session.world));
+    }
+  };
 
-      <label>World seed</label>
-      <input type="number" id="ws-seed" value="1" style="width:100px" />
+  void render();
+}
 
-      <div style="margin-top:0.75rem">
-        <button class="primary" id="ws-run">Run Simulation</button>
-      </div>
+function bindEvents(host: HTMLElement, context: PanelContext, rerender: () => Promise<void>): void {
+  host.querySelectorAll<HTMLInputElement>("[data-select-entity]").forEach((input) => {
+    input.addEventListener("change", () => {
+      context.updateState((state) => {
+        const id = input.dataset.selectEntity;
+        if (!id) return;
+        if (input.checked) {
+          state.sim.selectedEntityIds = [...new Set([...state.sim.selectedEntityIds, id])];
+        } else {
+          state.sim.selectedEntityIds = state.sim.selectedEntityIds.filter((item) => item !== id);
+        }
+      });
+    });
+  });
 
-      <div class="output" id="ws-output">Configure polities and click "Run Simulation".</div>
+  host.querySelector("#sr-build-world")?.addEventListener("click", () => {
+    context.updateState((state) => {
+      state.world.seed = numberValue(host, "#sr-seed", state.world.seed);
+      state.sim.maxTicks = numberValue(host, "#sr-max-ticks", state.sim.maxTicks);
+      state.sim.speed = floatValue(host, "#sr-speed", state.sim.speed);
+    });
+    activeSession = buildSession(context);
+    void rerender();
+  });
 
-      <!-- TODO Phase 3: render a territory map using SVG or canvas.          -->
-      <!-- Each polity's locationIds would be drawn as cells on a grid,       -->
-      <!-- coloured by polityId, with trade routes shown as lines.            -->
-    </div>
-  `;
+  host.querySelector("#sr-start")?.addEventListener("click", () => {
+    if (!activeSession) activeSession = buildSession(context);
+    clearRunTimer();
+    const stepDelay = Math.max(20, 220 / context.getState().sim.speed);
+    runTimer = window.setInterval(() => {
+      if (!activeSession) return;
+      stepSimulation(activeSession, context);
+      if (activeSession.world.tick >= context.getState().sim.maxTicks || hasWinner(activeSession.world)) {
+        clearRunTimer();
+      }
+      void rerender();
+    }, stepDelay);
+  });
 
-  host.querySelector("#ws-run")?.addEventListener("click", () => {
-    runWorldSim(host);
+  host.querySelector("#sr-pause")?.addEventListener("click", () => {
+    clearRunTimer();
+  });
+
+  host.querySelector("#sr-step")?.addEventListener("click", () => {
+    if (!activeSession) activeSession = buildSession(context);
+    if (activeSession) {
+      stepSimulation(activeSession, context);
+      void rerender();
+    }
+  });
+
+  host.querySelector("#sr-reset")?.addEventListener("click", () => {
+    clearRunTimer();
+    activeSession = null;
+    void rerender();
+  });
+
+  host.querySelector("#sr-queue-command")?.addEventListener("click", async () => {
+    if (!activeSession) {
+      activeSession = buildSession(context);
+    }
+    const session = activeSession;
+    if (!session) return;
+
+    const entityId = numberValue(host, "#sr-command-entity", session.world.entities[0]?.id ?? 1);
+    const commandKind = stringValue(host, "#sr-command-kind", "move");
+    const targetId = numberValue(host, "#sr-command-target", entityId);
+    const intensity = numberValue(host, "#sr-command-intensity", 10000);
+    const [x, y] = pairValue(host, "#sr-command-dir", 1, 0);
+
+    const queue = session.pendingCommands.get(entityId) ?? [];
+    let command: CommandLike;
+    if (commandKind === "attack") {
+      command = { kind: "attack", targetId, mode: "strike", intensity };
+    } else if (commandKind === "flee") {
+      command = { kind: "move", dir: { x: -x, y: -y, z: 0 }, intensity, mode: "run" };
+    } else {
+      command = { kind: "move", dir: { x, y, z: 0 }, intensity, mode: "run" };
+    }
+    session.pendingCommands.set(entityId, [...queue, command]);
+
+    if (context.getState().world.multiplayer.enabled && worldServerSessionId) {
+      await worldServer.sendCommands(worldServerSessionId, { entityId, command });
+      worldServerModeMessage = `${worldServerModeMessage}\nQueued command for remote entity #${entityId}.`;
+    }
+    void rerender();
+  });
+
+  host.querySelector("#sr-open-replay")?.addEventListener("click", () => {
+    context.navigate("replay");
+  });
+
+  host.querySelector("#sr-load-preview")?.addEventListener("click", async () => {
+    const previewHost = host.querySelector<HTMLElement>("#sr-preview-host");
+    if (!previewHost) return;
+    if (!previewRendererPromise) {
+      previewRendererPromise = createPreviewRenderer(previewHost).then((renderer) => {
+        previewRenderer = renderer;
+        return renderer;
+      });
+    }
+    await previewRendererPromise;
+    if (activeSession && previewRenderer) {
+      previewRenderer.render(makePreviewPayload(activeSession.world));
+    }
+  });
+
+  host.querySelectorAll<HTMLTableRowElement>("[data-entity-id]").forEach((row) => {
+    row.addEventListener("click", () => {
+      if (!activeSession) return;
+      activeSession.selectedEntityId = Number.parseInt(row.dataset.entityId ?? "0", 10) || null;
+      void rerender();
+    });
+  });
+
+  host.querySelector("#sr-server-connect")?.addEventListener("click", async () => {
+    context.updateState((state) => {
+      state.world.multiplayer.enabled = stringValue(host, "#sr-multiplayer-enabled", "false") === "true";
+      state.world.multiplayer.baseUrl = stringValue(host, "#sr-server-base", state.world.multiplayer.baseUrl);
+      state.world.multiplayer.pollMs = numberValue(host, "#sr-server-poll", state.world.multiplayer.pollMs);
+    });
+    const result = await worldServer.connect(context.getState().world.multiplayer.baseUrl);
+    worldServerModeMessage = `${result.message}\nPolling: ${context.getState().world.multiplayer.pollMs} ms.`;
+    void rerender();
+  });
+
+  host.querySelector("#sr-server-session")?.addEventListener("click", async () => {
+    const state = context.getState();
+    const selected = state.entities.filter((entity) => state.sim.selectedEntityIds.includes(entity.id));
+    if (selected.length === 0) {
+      worldServerModeMessage = "Select at least one roster entry before creating a world-server session.";
+      void rerender();
+      return;
+    }
+    worldServerSessionId = await worldServer.createSession({
+      seed: state.world.seed,
+      entities: selected.map((entity, index) => toEntitySpec(entity, index + 1)),
+    });
+    worldServerModeMessage = `${worldServerModeMessage}\nCreated adapter session.`;
+    void rerender();
   });
 }
 
-function runWorldSim(host: HTMLElement): void {
-  const nameA      = (host.querySelector<HTMLInputElement>("#ws-name-a"))?.value     ?? "Polity A";
-  const nameB      = (host.querySelector<HTMLInputElement>("#ws-name-b"))?.value     ?? "Polity B";
-  const popA       = parseInt((host.querySelector<HTMLInputElement>("#ws-pop-a"))?.value ?? "5000", 10);
-  const popB       = parseInt((host.querySelector<HTMLInputElement>("#ws-pop-b"))?.value ?? "3000", 10);
-  const treasuryA  = parseInt((host.querySelector<HTMLInputElement>("#ws-treasury-a"))?.value ?? "2000", 10);
-  const treasuryB  = parseInt((host.querySelector<HTMLInputElement>("#ws-treasury-b"))?.value ?? "4000", 10);
-  const days       = parseInt((host.querySelector<HTMLInputElement>("#ws-days"))?.value ?? "30", 10);
-  const seed       = parseInt((host.querySelector<HTMLInputElement>("#ws-seed"))?.value ?? "1", 10);
-  const output     = host.querySelector<HTMLElement>("#ws-output");
-  if (!output) return;
+function buildSession(context: PanelContext): SimulationSession {
+  const state = context.getState();
+  const selected = state.entities.filter((entity) => state.sim.selectedEntityIds.includes(entity.id));
+  const entities = selected.map((entity, index) => toEntitySpec(entity, index + 1));
 
-  output.textContent = "Running…";
+  const world = createWorld(state.world.seed, entities);
+  const recorder = new ReplayRecorder(world);
+  return {
+    world,
+    recorder,
+    log: [`Built session for ${state.world.name} with ${entities.length} entities.`],
+    selectedEntityId: world.entities[0]?.id ?? null,
+    pendingCommands: new Map(),
+  };
+}
 
-  setTimeout(() => {
-    try {
-      // Build two polities sharing one trade location.
-      // createPolity(id, name, factionId, locationIds, population, treasury_cu, techEra, stabilityQ?, moraleQ?)
-      const polityA = createPolity(
-        "polity-a",
-        nameA,
-        "faction-a",
-        ["loc-border", "loc-a-capital"],
-        isNaN(popA) ? 5000 : popA,
-        isNaN(treasuryA) ? 2000 : treasuryA,
-        TECH_ERA_MEDIEVAL,
-        q(0.70),
-        q(0.65),
-      );
+function stepSimulation(session: SimulationSession, context: PanelContext): void {
+  const before = new Map(session.world.entities.map((entity) => [entity.id, { shock: entity.injury.shock, dead: entity.injury.dead }]));
+  const commands = new Map(session.pendingCommands.entries());
+  session.recorder.record(session.world.tick, commands as never);
+  stepWorld(session.world, commands as never, KERNEL_CONTEXT);
+  session.pendingCommands.clear();
 
-      const polityB = createPolity(
-        "polity-b",
-        nameB,
-        "faction-b",
-        ["loc-border", "loc-b-capital"],
-        isNaN(popB) ? 3000 : popB,
-        isNaN(treasuryB) ? 4000 : treasuryB,
-        TECH_ERA_MEDIEVAL,
-        q(0.75),
-        q(0.60),
-      );
+  const deltas = session.world.entities
+    .map((entity) => {
+      const previous = before.get(entity.id);
+      const shockDelta = previous ? entity.injury.shock - previous.shock : 0;
+      const status = entity.injury.dead ? "dead" : entity.injury.consciousness < 2000 ? "fading" : "active";
+      return `t${session.world.tick} • #${entity.id} ${status} @ (${entity.position_m.x},${entity.position_m.y}) Δshock=${shockDelta.toFixed(0)}`;
+    })
+    .join("\n");
+  session.log.push(deltas);
 
-      const registry: PolityRegistry = createPolityRegistry([polityA, polityB]);
+  const winner = hasWinner(session.world);
+  if (winner) {
+    session.log.push(`Winner: Team ${winner} at tick ${session.world.tick}.`);
+  }
 
-      const pairs = [
-        {
-          polityAId: "polity-a",
-          polityBId: "polity-b",
-          sharedLocations: 1,
-          routeQuality_Q: q(0.60),
-        },
-      ];
+  const replayJson = serializeReplay(session.recorder.toReplay());
+  context.updateState((state) => {
+    state.latestReplayJson = replayJson;
+    state.latestReplayName = `${state.world.name} @ tick ${session.world.tick}`;
+  });
 
-      const safeDays = isNaN(days) || days < 1 ? DEFAULT_DAYS : Math.min(days, 365);
-      const safeSeed = isNaN(seed) ? 1 : seed;
+  if (previewRenderer) {
+    previewRenderer.render(makePreviewPayload(session.world));
+  }
+}
 
-      let totalTradeIncome = 0;
+function hasWinner(world: WorldState): number | null {
+  const livingTeams = new Set(
+    world.entities
+      .filter((entity) => !entity.injury.dead && entity.injury.consciousness >= 2000)
+      .map((entity) => entity.teamId),
+  );
+  return livingTeams.size === 1 ? [...livingTeams][0] ?? null : null;
+}
 
-      for (let day = 0; day < safeDays; day++) {
-        const result = stepPolityDay(registry, pairs, safeSeed, day);
-        for (const tr of result.trade) {
-          totalTradeIncome += tr.incomeEach_cu * 2; // both sides receive incomeEach
-        }
-      }
+function makePreviewPayload(world: WorldState) {
+  return {
+    tick: world.tick,
+    sourceWorld: world,
+    entities: world.entities.map((entity) => ({
+      id: entity.id,
+      teamId: entity.teamId,
+      x: entity.position_m.x,
+      y: entity.position_m.y,
+      shock: entity.injury.shock,
+      consciousness: entity.injury.consciousness,
+      dead: entity.injury.dead,
+    })),
+  };
+}
 
-      const a = registry.polities.get("polity-a")!;
-      const b = registry.polities.get("polity-b")!;
+function clearRunTimer(): void {
+  if (runTimer !== null) {
+    window.clearInterval(runTimer);
+    runTimer = null;
+  }
+}
 
-      const lines: string[] = [
-        `Days simulated : ${safeDays}`,
-        `World seed     : ${safeSeed}`,
-        ``,
-        `${a.name}`,
-        `  Population : ${a.population}`,
-        `  Treasury   : ${a.treasury_cu} cu`,
-        `  Morale     : ${a.moraleQ}`,
-        `  Stability  : ${a.stabilityQ}`,
-        ``,
-        `${b.name}`,
-        `  Population : ${b.population}`,
-        `  Treasury   : ${b.treasury_cu} cu`,
-        `  Morale     : ${b.moraleQ}`,
-        `  Stability  : ${b.stabilityQ}`,
-        ``,
-        `Total trade income (both sides): ${totalTradeIncome} cu over ${safeDays} days`,
-        ``,
-        `TODO Phase 3: territory map visualization`,
-      ];
+function countQueuedCommands(commands: Map<number, readonly CommandLike[]>): number {
+  return [...commands.values()].reduce((sum, list) => sum + list.length, 0);
+}
 
-      output.textContent = lines.join("\n");
-    } catch (err) {
-      output.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
-    }
-  }, 0);
+function stringValue(host: HTMLElement, selector: string, fallback: string): string {
+  return (host.querySelector<HTMLInputElement | HTMLSelectElement>(selector)?.value ?? fallback).trim();
+}
+
+function numberValue(host: HTMLElement, selector: string, fallback: number): number {
+  return Number.parseInt(stringValue(host, selector, String(fallback)), 10) || fallback;
+}
+
+function floatValue(host: HTMLElement, selector: string, fallback: number): number {
+  return Number.parseFloat(stringValue(host, selector, String(fallback))) || fallback;
+}
+
+function pairValue(host: HTMLElement, selector: string, fallbackX: number, fallbackY: number): [number, number] {
+  const values = stringValue(host, selector, `${fallbackX},${fallbackY}`)
+    .split(",")
+    .map((item) => Number.parseInt(item.trim(), 10));
+  const x = values[0];
+  const y = values[1];
+  return [typeof x === "number" && Number.isFinite(x) ? x : fallbackX, typeof y === "number" && Number.isFinite(y) ? y : fallbackY];
+}
+
+function toEntitySpec(entity: { teamId: number; seed: number; archetype: string; weaponId?: string; armourId?: string }, id: number) {
+  return {
+    id,
+    teamId: entity.teamId,
+    seed: entity.seed,
+    archetype: entity.archetype,
+    weaponId: entity.weaponId ?? "wpn_boxing_gloves",
+    ...(entity.armourId ? { armourId: entity.armourId } : {}),
+  };
 }
