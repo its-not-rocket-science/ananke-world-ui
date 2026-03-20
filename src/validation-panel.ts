@@ -17,7 +17,9 @@ import {
   q,
   SCALE,
 } from "@its-not-rocket-science/ananke";
-import type { KernelContext } from "@its-not-rocket-science/ananke";
+
+// KernelContext is not in the root barrel (v0.1.3); use Parameters<> to extract it.
+type KernelContext = Parameters<typeof stepWorld>[2];
 
 const CTX: KernelContext = { tractionCoeff: q(0.85) };
 
@@ -81,16 +83,16 @@ function runArmourVsUnarmouredShock(): ValidationResult {
 
   for (let t = 0; t < TICK_LIMIT; t++) {
     stepWorld(worldArmed, new Map(), CTX);
-    const e = worldArmed.entities.get(1);
-    if (e?.condition && (e.condition.shockQ ?? 0) > SHOCK_THRESHOLD && tickArmed === TICK_LIMIT) {
+    const e = worldArmed.entities.find(en => en.id === 1);
+    if (e && e.injury.shock > SHOCK_THRESHOLD && tickArmed === TICK_LIMIT) {
       tickArmed = t;
     }
   }
 
   for (let t = 0; t < TICK_LIMIT; t++) {
     stepWorld(worldUnarmoured, new Map(), CTX);
-    const e = worldUnarmoured.entities.get(1);
-    if (e?.condition && (e.condition.shockQ ?? 0) > SHOCK_THRESHOLD && tickUnarmoured === TICK_LIMIT) {
+    const e = worldUnarmoured.entities.find(en => en.id === 1);
+    if (e && e.injury.shock > SHOCK_THRESHOLD && tickUnarmoured === TICK_LIMIT) {
       tickUnarmoured = t;
     }
   }
@@ -112,8 +114,8 @@ function runFightTerminates(): ValidationResult {
 
   for (let t = 0; t < MAX_TICKS; t++) {
     stepWorld(world, new Map(), CTX);
-    for (const entity of world.entities.values()) {
-      if (entity.condition?.isConscious === false || entity.dead) {
+    for (const entity of world.entities) {
+      if (entity.injury.dead || entity.injury.consciousness < 0.2) {
         return {
           pass: true,
           message: `Fight ended at tick ${t} — entity ${entity.id} went down.`,
@@ -134,8 +136,8 @@ function runHeavierEntitySlower(): ValidationResult {
   const goblinWorld = createWorld(1, [{ id: 1, teamId: 1, seed: 1, archetype: "GOBLIN", weaponId: "fist" }]);
 
   // Record starting position
-  const trollStart  = trollWorld.entities.get(1)?.pos.x  ?? 0;
-  const goblinStart = goblinWorld.entities.get(1)?.pos.x ?? 0;
+  const trollStart  = trollWorld.entities.find(e => e.id === 1)?.position_m.x  ?? 0;
+  const goblinStart = goblinWorld.entities.find(e => e.id === 1)?.position_m.x ?? 0;
 
   const STEPS = 50;
   for (let t = 0; t < STEPS; t++) {
@@ -143,13 +145,13 @@ function runHeavierEntitySlower(): ValidationResult {
     stepWorld(goblinWorld, new Map(), CTX);
   }
 
-  const trollDist  = Math.abs((trollWorld.entities.get(1)?.pos.x  ?? 0) - trollStart);
-  const goblinDist = Math.abs((goblinWorld.entities.get(1)?.pos.x ?? 0) - goblinStart);
+  const trollDist  = Math.abs((trollWorld.entities.find(e => e.id === 1)?.position_m.x  ?? 0) - trollStart);
+  const goblinDist = Math.abs((goblinWorld.entities.find(e => e.id === 1)?.position_m.x ?? 0) - goblinStart);
 
   // In a purely autonomous 1-entity world both entities may not move (no target).
   // The test verifies neither crashes and both entities are still alive.
-  const trollAlive  = trollWorld.entities.get(1)  !== undefined;
-  const goblinAlive = goblinWorld.entities.get(1) !== undefined;
+  const trollAlive  = trollWorld.entities.find(e => e.id === 1)  !== undefined;
+  const goblinAlive = goblinWorld.entities.find(e => e.id === 1) !== undefined;
   const pass = trollAlive && goblinAlive;
 
   return {

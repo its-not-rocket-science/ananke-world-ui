@@ -11,7 +11,15 @@
     "isolatedModules": true,
     "esModuleInterop": false,
     "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "paths": {
+      "@its-not-rocket-science/ananke/polity": [
+        "./node_modules/@its-not-rocket-science/ananke/dist/src/polity.d.ts"
+      ],
+      "@its-not-rocket-science/ananke/dist/src/polity.js": [
+        "./node_modules/@its-not-rocket-science/ananke/dist/src/polity.d.ts"
+      ]
+    }
   },
   "include": ["src/**/*", "vite.config.ts"],
   "exclude": ["node_modules", "dist"]

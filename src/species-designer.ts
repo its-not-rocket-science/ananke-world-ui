@@ -84,23 +84,21 @@ function previewIndividual(host: HTMLElement): void {
       `Archetype : ${archKey}`,
       `Seed      : ${seed}`,
       `---`,
-      `Mass      : ${individual.mass_kg} (${(individual.mass_kg / 1000).toFixed(1)} kg)`,
-      `Stature   : ${individual.stature_m} (${(individual.stature_m / 1000).toFixed(2)} m)`,
-      `Reach     : ${individual.reach_m} (${(individual.reach_m / 1000).toFixed(2)} m)`,
+      `Mass      : ${individual.morphology.mass_kg} (${(individual.morphology.mass_kg / 1000).toFixed(1)} kg)`,
+      `Stature   : ${individual.morphology.stature_m} (${(individual.morphology.stature_m / 1000).toFixed(2)} m)`,
+      `Reach     : ${individual.morphology.reachScale} (reachScale Q)`,
     ];
 
-    if (individual.combat) {
-      lines.push(
-        `Stability : ${individual.combat.stabilityQ}`,
-        `Reaction  : ${individual.combat.reactionTime_s} s (×1000)`,
-        `Strength  : ${individual.combat.peakForce_N}`,
-      );
-    }
+    lines.push(
+      `Stability : ${individual.control.stability}`,
+      `Reaction  : ${individual.control.reactionTime_s} (×1000 s)`,
+      `Strength  : ${individual.performance.peakForce_N}`,
+    );
 
     if (individual.cognition) {
       lines.push(
         `--- Cognition ---`,
-        `Linguistic: ${individual.cognition.linguisticVerbal ?? "n/a"}`,
+        `Linguistic: ${individual.cognition.linguistic ?? "n/a"}`,
         `Logical   : ${individual.cognition.logicalMathematical ?? "n/a"}`,
         `Kinesthetic: ${individual.cognition.bodilyKinesthetic ?? "n/a"}`,
       );

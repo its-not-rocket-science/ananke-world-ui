@@ -17,12 +17,14 @@ import {
   ARCHETYPE_MAP,
   ITEM_MAP,
 } from "@its-not-rocket-science/ananke";
-import type { KernelContext } from "@its-not-rocket-science/ananke";
 import { q } from "@its-not-rocket-science/ananke";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MAX_TICKS = 2000;
+
+// KernelContext is not in the root barrel (v0.1.3); use Parameters<> to extract it.
+type KernelContext = Parameters<typeof stepWorld>[2];
 
 // Minimal KernelContext: traction on firm ground, no terrain or weather modifiers.
 const CTX: KernelContext = {
@@ -154,8 +156,8 @@ function runFight(host: HTMLElement): void {
         stepWorld(world, new Map(), CTX);
 
         // Check if any entity is dead or unconscious
-        const entities = [...world.entities.values()];
-        const dead = entities.filter((e) => e.condition?.isConscious === false || e.dead);
+        const entities = world.entities;
+        const dead = entities.filter((e) => e.injury.dead || e.injury.consciousness < 0.2);
 
         if (dead.length > 0) {
           const survivors = entities.filter((e) => !dead.includes(e));
@@ -181,15 +183,13 @@ function runFight(host: HTMLElement): void {
       ];
 
       // Append final condition snapshot for each entity
-      for (const [id, entity] of world.entities) {
-        const c = entity.condition;
-        if (c) {
-          lines.push(
-            `  Entity ${id}: shock=${(c.shockQ ?? 0).toFixed(0)}  ` +
-            `conscious=${String(c.isConscious ?? true)}  ` +
-            `fatigue=${(c.fatigueQ ?? 0).toFixed(0)}`,
-          );
-        }
+      for (const entity of world.entities) {
+        const inj = entity.injury;
+        lines.push(
+          `  Entity ${entity.id}: shock=${inj.shock.toFixed(0)}  ` +
+          `conscious=${inj.consciousness.toFixed(0)}  ` +
+          `dead=${String(inj.dead)}`,
+        );
       }
 
       output.textContent = lines.join("\n");

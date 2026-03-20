@@ -14,9 +14,11 @@ import {
   deserializeReplay,
   replayTo,
 } from "@its-not-rocket-science/ananke";
-import type { KernelContext, Replay } from "@its-not-rocket-science/ananke";
+import type { Replay } from "@its-not-rocket-science/ananke";
 import { q } from "@its-not-rocket-science/ananke";
 
+// KernelContext is not in the root barrel (v0.1.3); use inline type.
+type KernelContext = Parameters<typeof replayTo>[2];
 const CTX: KernelContext = { tractionCoeff: q(0.85) };
 
 export function mountReplayViewer(host: HTMLElement): void {
@@ -103,13 +105,11 @@ export function mountReplayViewer(host: HTMLElement): void {
       const world = replayTo(currentReplay, targetTick, CTX);
       const lines: string[] = [`State at tick ${targetTick}:`];
 
-      for (const [id, entity] of world.entities) {
-        const c = entity.condition;
+      for (const entity of world.entities) {
+        const inj = entity.injury;
         lines.push(
-          `  Entity ${id}: pos=(${entity.pos.x},${entity.pos.y}) ` +
-          (c
-            ? `shock=${c.shockQ ?? 0}  conscious=${String(c.isConscious ?? true)}`
-            : "(no condition)"),
+          `  Entity ${entity.id}: pos=(${entity.position_m.x},${entity.position_m.y}) ` +
+          `shock=${inj.shock}  conscious=${inj.consciousness}  dead=${String(inj.dead)}`,
         );
       }
 

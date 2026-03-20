@@ -17,6 +17,9 @@ import {
 import type { PolityRegistry } from "@its-not-rocket-science/ananke/polity";
 import { q } from "@its-not-rocket-science/ananke";
 
+// TechEra.Medieval = 2 (numeric era code from src/sim/tech.ts)
+const TECH_ERA_MEDIEVAL = 2 as const;
+
 const DEFAULT_DAYS = 30;
 
 export function mountWorldSimulator(host: HTMLElement): void {
@@ -86,26 +89,31 @@ function runWorldSim(host: HTMLElement): void {
 
   setTimeout(() => {
     try {
-      // Build two polities sharing one trade location
-      const polityA = createPolity({
-        id: "polity-a",
-        name: nameA,
-        population: isNaN(popA) ? 5000 : popA,
-        locationIds: ["loc-border", "loc-a-capital"],
-        treasury_cu: isNaN(treasuryA) ? 2000 : treasuryA,
-        morale_Q: q(0.65),
-        stability_Q: q(0.70),
-      });
+      // Build two polities sharing one trade location.
+      // createPolity(id, name, factionId, locationIds, population, treasury_cu, techEra, stabilityQ?, moraleQ?)
+      const polityA = createPolity(
+        "polity-a",
+        nameA,
+        "faction-a",
+        ["loc-border", "loc-a-capital"],
+        isNaN(popA) ? 5000 : popA,
+        isNaN(treasuryA) ? 2000 : treasuryA,
+        TECH_ERA_MEDIEVAL,
+        q(0.70),
+        q(0.65),
+      );
 
-      const polityB = createPolity({
-        id: "polity-b",
-        name: nameB,
-        population: isNaN(popB) ? 3000 : popB,
-        locationIds: ["loc-border", "loc-b-capital"],
-        treasury_cu: isNaN(treasuryB) ? 4000 : treasuryB,
-        morale_Q: q(0.60),
-        stability_Q: q(0.75),
-      });
+      const polityB = createPolity(
+        "polity-b",
+        nameB,
+        "faction-b",
+        ["loc-border", "loc-b-capital"],
+        isNaN(popB) ? 3000 : popB,
+        isNaN(treasuryB) ? 4000 : treasuryB,
+        TECH_ERA_MEDIEVAL,
+        q(0.75),
+        q(0.60),
+      );
 
       const registry: PolityRegistry = createPolityRegistry([polityA, polityB]);
 
@@ -125,7 +133,7 @@ function runWorldSim(host: HTMLElement): void {
 
       for (let day = 0; day < safeDays; day++) {
         const result = stepPolityDay(registry, pairs, safeSeed, day);
-        for (const tr of result.tradeResults) {
+        for (const tr of result.trade) {
           totalTradeIncome += tr.incomeEach_cu * 2; // both sides receive incomeEach
         }
       }
@@ -140,14 +148,14 @@ function runWorldSim(host: HTMLElement): void {
         `${a.name}`,
         `  Population : ${a.population}`,
         `  Treasury   : ${a.treasury_cu} cu`,
-        `  Morale     : ${a.morale_Q}`,
-        `  Stability  : ${a.stability_Q}`,
+        `  Morale     : ${a.moraleQ}`,
+        `  Stability  : ${a.stabilityQ}`,
         ``,
         `${b.name}`,
         `  Population : ${b.population}`,
         `  Treasury   : ${b.treasury_cu} cu`,
-        `  Morale     : ${b.morale_Q}`,
-        `  Stability  : ${b.stability_Q}`,
+        `  Morale     : ${b.moraleQ}`,
+        `  Stability  : ${b.stabilityQ}`,
         ``,
         `Total trade income (both sides): ${totalTradeIncome} cu over ${safeDays} days`,
         ``,
