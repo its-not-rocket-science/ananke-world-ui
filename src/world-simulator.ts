@@ -13,8 +13,8 @@ import {
   createPolity,
   createPolityRegistry,
   stepPolityDay,
-} from "@its-not-rocket-science/ananke";
-import type { PolityRegistry } from "@its-not-rocket-science/ananke";
+} from "@its-not-rocket-science/ananke/polity";
+import type { PolityRegistry } from "@its-not-rocket-science/ananke/polity";
 import { q } from "@its-not-rocket-science/ananke";
 
 const DEFAULT_DAYS = 30;
