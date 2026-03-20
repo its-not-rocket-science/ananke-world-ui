@@ -1,27 +1,37 @@
-// src/main.ts — ananke-world-ui entry point
-//
-// Bootstraps the tab router and mounts each panel component.
-// Each panel is a self-contained module that renders into its host element.
-
 import { mountScenarioBuilder } from "./scenario-builder.js";
 import { mountSpeciesDesigner } from "./species-designer.js";
 import { mountWorldSimulator } from "./world-simulator.js";
 import { mountReplayViewer } from "./replay-viewer.js";
 import { mountValidationPanel } from "./validation-panel.js";
-
-// ── Tab router ────────────────────────────────────────────────────────────────
+import { createDefaultState } from "./models.js";
+import type { AppState } from "./models.js";
+import type { PanelContext } from "./app-types.js";
 
 const TAB_IDS = ["scenario", "species", "world", "replay", "validation"] as const;
 type TabId = (typeof TAB_IDS)[number];
 
+const state: AppState = createDefaultState();
+let activeTab: TabId = "scenario";
+
+const context: PanelContext = {
+  getState: () => state,
+  updateState(updater) {
+    updater(state);
+  },
+  navigate(tabId) {
+    if ((TAB_IDS as readonly string[]).includes(tabId)) {
+      activateTab(tabId as TabId);
+    }
+  },
+};
+
 function activateTab(id: TabId): void {
-  // Update nav buttons
+  activeTab = id;
   document.querySelectorAll("nav button").forEach((btn) => {
     const el = btn as HTMLButtonElement;
     el.classList.toggle("active", el.dataset["tab"] === id);
   });
 
-  // Update panels
   TAB_IDS.forEach((tabId) => {
     const panel = document.getElementById(`tab-${tabId}`);
     if (panel) {
@@ -41,24 +51,22 @@ function initRouter(): void {
   });
 }
 
-// ── Bootstrap ─────────────────────────────────────────────────────────────────
-
 function main(): void {
   initRouter();
 
-  // Mount each panel into its host element.
-  // Each mount function is responsible for rendering its own HTML and wiring events.
   const scenarioEl = document.getElementById("tab-scenario");
   const speciesEl = document.getElementById("tab-species");
   const worldEl = document.getElementById("tab-world");
   const replayEl = document.getElementById("tab-replay");
   const validationEl = document.getElementById("tab-validation");
 
-  if (scenarioEl) mountScenarioBuilder(scenarioEl);
-  if (speciesEl) mountSpeciesDesigner(speciesEl);
-  if (worldEl) mountWorldSimulator(worldEl);
-  if (replayEl) mountReplayViewer(replayEl);
-  if (validationEl) mountValidationPanel(validationEl);
+  if (scenarioEl) mountScenarioBuilder(scenarioEl, context);
+  if (speciesEl) mountSpeciesDesigner(speciesEl, context);
+  if (worldEl) mountWorldSimulator(worldEl, context);
+  if (replayEl) mountReplayViewer(replayEl, context);
+  if (validationEl) mountValidationPanel(validationEl, context);
+
+  activateTab(activeTab);
 }
 
 main();

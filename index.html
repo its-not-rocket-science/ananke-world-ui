@@ -5,106 +5,221 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Ananke World UI</title>
     <style>
-      /* ── Reset & base ───────────────────────────────────────────────────── */
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
+      :root {
+        color-scheme: dark;
+        --bg: #0b1120;
+        --panel: #111827;
+        --panel-soft: #172033;
+        --line: #273449;
+        --muted: #94a3b8;
+        --text: #e2e8f0;
+        --primary: #8b5cf6;
+        --primary-strong: #7c3aed;
+        --teal: #14b8a6;
+        --danger: #ef4444;
+      }
       body {
-        font-family: system-ui, -apple-system, sans-serif;
+        font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         font-size: 15px;
-        background: #0f1117;
-        color: #e2e8f0;
+        background: radial-gradient(circle at top, #131c33 0%, var(--bg) 45%);
+        color: var(--text);
         min-height: 100vh;
         display: flex;
         flex-direction: column;
       }
-
-      /* ── Header ─────────────────────────────────────────────────────────── */
       header {
-        background: #1a1d27;
-        border-bottom: 1px solid #2d3148;
-        padding: 0.75rem 1.5rem;
+        background: rgba(11, 17, 32, 0.88);
+        backdrop-filter: blur(12px);
+        border-bottom: 1px solid var(--line);
+        padding: 1rem 1.5rem;
         display: flex;
+        justify-content: space-between;
         align-items: center;
         gap: 1rem;
       }
-      header h1 { font-size: 1.1rem; font-weight: 600; color: #a78bfa; }
-      header p { font-size: 0.8rem; color: #64748b; }
-
-      /* ── Tab nav ─────────────────────────────────────────────────────────── */
+      header h1 { font-size: 1.2rem; color: #c4b5fd; }
+      header p { font-size: 0.84rem; color: var(--muted); }
+      .header-badge {
+        font-size: 0.75rem;
+        color: #d8b4fe;
+        border: 1px solid rgba(139, 92, 246, 0.35);
+        background: rgba(76, 29, 149, 0.25);
+        border-radius: 999px;
+        padding: 0.35rem 0.7rem;
+      }
       nav {
         display: flex;
-        gap: 0;
-        background: #1a1d27;
-        border-bottom: 1px solid #2d3148;
-        padding: 0 1.5rem;
+        gap: 0.35rem;
+        flex-wrap: wrap;
+        padding: 0.75rem 1.5rem;
+        border-bottom: 1px solid var(--line);
+        background: rgba(17, 24, 39, 0.82);
       }
-      nav button {
-        background: none;
-        border: none;
-        border-bottom: 2px solid transparent;
-        color: #94a3b8;
+      nav button, button, .inline-upload {
+        background: transparent;
+        border: 1px solid var(--line);
+        color: var(--text);
+        border-radius: 0.6rem;
         cursor: pointer;
-        font-size: 0.85rem;
-        padding: 0.6rem 1rem;
-        transition: color 0.15s, border-color 0.15s;
+        font-size: 0.84rem;
+        padding: 0.55rem 0.9rem;
+        transition: 140ms ease;
       }
-      nav button:hover { color: #e2e8f0; }
-      nav button.active { color: #a78bfa; border-bottom-color: #a78bfa; }
-
-      /* ── Tab panels ─────────────────────────────────────────────────────── */
+      nav button:hover, button:hover, .inline-upload:hover { border-color: #64748b; background: rgba(148, 163, 184, 0.08); }
+      nav button.active, button.primary {
+        background: linear-gradient(135deg, var(--primary) 0%, var(--primary-strong) 100%);
+        border-color: transparent;
+        color: white;
+        box-shadow: 0 10px 24px rgba(124, 58, 237, 0.22);
+      }
+      .inline-upload { display: inline-flex; align-items: center; gap: 0.5rem; }
+      .inline-upload input { border: none; padding: 0; margin: 0; width: auto; }
       main { flex: 1; padding: 1.5rem; }
       .panel { display: none; }
       .panel.active { display: block; }
-
-      /* ── Panel content ───────────────────────────────────────────────────── */
-      .panel h2 { font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; color: #c4b5fd; }
-      .panel p.subtitle {
-        font-size: 0.8rem;
-        color: #64748b;
-        margin-bottom: 1rem;
-        border-left: 2px solid #2d3148;
-        padding-left: 0.5rem;
+      .panel-shell, .stack-lg { display: grid; gap: 1rem; }
+      .panel-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: start;
+        flex-wrap: wrap;
+      }
+      .panel h2 { font-size: 1.08rem; color: #ddd6fe; margin-bottom: 0.35rem; }
+      .subtitle {
+        max-width: 70ch;
+        color: var(--muted);
+        font-size: 0.88rem;
+        line-height: 1.5;
+      }
+      .header-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+      .two-col-layout, .dashboard-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 1rem;
+        align-items: start;
       }
       .card {
-        background: #1a1d27;
-        border: 1px solid #2d3148;
-        border-radius: 6px;
+        background: linear-gradient(180deg, rgba(17, 24, 39, 0.95), rgba(15, 23, 42, 0.95));
+        border: 1px solid var(--line);
+        border-radius: 1rem;
         padding: 1rem;
-        max-width: 640px;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.16);
       }
-      label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.25rem; }
-      select, input[type="range"], input[type="number"], input[type="text"] {
-        background: #0f1117;
-        border: 1px solid #2d3148;
-        border-radius: 4px;
-        color: #e2e8f0;
-        font-size: 0.85rem;
-        padding: 0.35rem 0.5rem;
+      .card h3 { font-size: 0.96rem; margin-bottom: 0.8rem; color: #f8fafc; }
+      .card-header-inline { display: flex; justify-content: space-between; gap: 1rem; align-items: center; margin-bottom: 0.75rem; }
+      .three-up, .inline-fields, .slider-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.75rem;
+      }
+      .inline-fields.wrap { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+      .slider-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0.75rem 0 1rem; }
+      label { display: grid; gap: 0.35rem; color: var(--muted); font-size: 0.8rem; }
+      label span { display: block; }
+      input, select, textarea {
+        background: rgba(11, 17, 32, 0.9);
+        border: 1px solid var(--line);
+        color: var(--text);
+        border-radius: 0.7rem;
+        padding: 0.65rem 0.75rem;
         width: 100%;
-        margin-bottom: 0.75rem;
+        font: inherit;
       }
-      button.primary {
-        background: #6d28d9;
-        border: none;
-        border-radius: 4px;
-        color: #fff;
-        cursor: pointer;
-        font-size: 0.85rem;
-        padding: 0.45rem 1rem;
-        transition: background 0.15s;
-      }
-      button.primary:hover { background: #7c3aed; }
+      textarea { min-height: 160px; resize: vertical; }
+      .json-output { min-height: 220px; font-family: "SFMono-Regular", ui-monospace, monospace; font-size: 0.76rem; }
       .output {
-        background: #0f1117;
-        border: 1px solid #2d3148;
-        border-radius: 4px;
-        font-family: monospace;
-        font-size: 0.78rem;
+        background: rgba(8, 13, 24, 0.96);
+        border: 1px solid var(--line);
+        border-radius: 0.8rem;
         color: #a5f3fc;
-        margin-top: 1rem;
-        padding: 0.75rem;
-        min-height: 80px;
+        font-family: "SFMono-Regular", ui-monospace, monospace;
+        font-size: 0.78rem;
+        min-height: 120px;
+        padding: 0.85rem;
         white-space: pre-wrap;
+      }
+      .output.tight { min-height: 0; }
+      .session-log { max-height: 360px; overflow: auto; }
+      .hint, .muted { color: var(--muted); font-size: 0.78rem; line-height: 1.45; }
+      .map-canvas {
+        width: 100%;
+        min-height: 280px;
+        border-radius: 0.8rem;
+        border: 1px solid var(--line);
+        background: linear-gradient(180deg, rgba(10, 24, 39, 0.8), rgba(15, 23, 42, 0.9));
+      }
+      .card-grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 0.85rem; }
+      .mini-card {
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid rgba(71, 85, 105, 0.6);
+        border-radius: 0.85rem;
+        padding: 0.8rem;
+        display: grid;
+        gap: 0.6rem;
+      }
+      .mini-card.is-selected { border-color: rgba(139, 92, 246, 0.8); box-shadow: inset 0 0 0 1px rgba(139,92,246,0.45); }
+      .mini-card__title { display: flex; justify-content: space-between; gap: 0.75rem; align-items: center; }
+      .kv-grid { display: grid; grid-template-columns: auto 1fr; gap: 0.35rem 0.75rem; font-size: 0.78rem; }
+      .kv-grid.compact { font-size: 0.76rem; }
+      .swatch { width: 0.8rem; height: 0.8rem; border-radius: 999px; display: inline-block; margin-right: 0.45rem; }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 0.18rem 0.55rem;
+        background: rgba(45, 212, 191, 0.14);
+        color: #99f6e4;
+        font-size: 0.72rem;
+      }
+      .button-row, .chip-wrap, .selection-list, .bar-stack { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+      .selection-list { flex-direction: column; margin: 0.8rem 0; }
+      .selection-item {
+        grid-template-columns: auto 1fr;
+        align-items: center;
+        gap: 0.65rem;
+        border: 1px solid rgba(71, 85, 105, 0.55);
+        border-radius: 0.8rem;
+        padding: 0.65rem 0.8rem;
+        background: rgba(15, 23, 42, 0.5);
+      }
+      .selection-item input { width: auto; }
+      .inline-pre { white-space: pre-wrap; font-family: inherit; font-size: 0.77rem; color: #cbd5e1; }
+      .entity-chip {
+        border: 1px solid rgba(71, 85, 105, 0.55);
+        background: rgba(15, 23, 42, 0.7);
+        border-radius: 999px;
+        padding: 0.45rem 0.75rem;
+      }
+      .entity-chip.is-selected { border-color: #8b5cf6; background: rgba(91, 33, 182, 0.28); }
+      .preview-host {
+        min-height: 320px;
+        display: grid;
+        place-items: center;
+        border: 1px dashed rgba(148, 163, 184, 0.3);
+        border-radius: 0.9rem;
+        background: rgba(11, 17, 32, 0.65);
+      }
+      .preview-fallback { display: grid; gap: 0.75rem; width: 100%; }
+      .preview-fallback canvas { width: 100%; border-radius: 0.85rem; border: 1px solid var(--line); background: #0f172a; }
+      .preview-caption { display: grid; gap: 0.2rem; font-size: 0.76rem; color: var(--muted); }
+      .data-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+      .data-table th, .data-table td { padding: 0.65rem 0.55rem; border-bottom: 1px solid rgba(71, 85, 105, 0.35); text-align: left; }
+      .data-table.compact-rows td, .data-table.compact-rows th { padding: 0.5rem 0.45rem; }
+      .is-selected-row { background: rgba(91, 33, 182, 0.18); }
+      .empty-state, .empty-cell { color: var(--muted); font-size: 0.82rem; }
+      .bar-row { display: grid; grid-template-columns: 80px 1fr 48px; gap: 0.75rem; align-items: center; width: 100%; }
+      .bar-track { width: 100%; height: 0.8rem; border-radius: 999px; background: rgba(51, 65, 85, 0.65); overflow: hidden; }
+      .bar-fill { height: 100%; border-radius: inherit; }
+      .chart-svg { width: 100%; min-height: 180px; border: 1px solid var(--line); border-radius: 0.8rem; background: rgba(8, 13, 24, 0.75); }
+      @media (max-width: 1024px) {
+        .two-col-layout, .dashboard-layout { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 720px) {
+        main { padding: 1rem; }
+        header, nav { padding-left: 1rem; padding-right: 1rem; }
+        .three-up, .inline-fields, .slider-grid { grid-template-columns: 1fr; }
       }
     </style>
   </head>
@@ -112,23 +227,24 @@
     <header>
       <div>
         <h1>Ananke World UI</h1>
-        <p>Design worlds &bull; Run simulations &bull; View replays</p>
+        <p>World builder • entity editor • sim runner • replay viewer • dashboard</p>
       </div>
+      <div class="header-badge">Prototype → runnable workbench</div>
     </header>
 
     <nav>
-      <button class="active" data-tab="scenario">Scenario Builder</button>
-      <button data-tab="species">Species Designer</button>
-      <button data-tab="world">World Sim</button>
+      <button class="active" data-tab="scenario">World Builder</button>
+      <button data-tab="species">Entity Editor</button>
+      <button data-tab="world">Sim Runner</button>
       <button data-tab="replay">Replay Viewer</button>
-      <button data-tab="validation">Validation</button>
+      <button data-tab="validation">Dashboard</button>
     </nav>
 
     <main>
       <div id="tab-scenario" class="panel active"></div>
-      <div id="tab-species"  class="panel"></div>
-      <div id="tab-world"    class="panel"></div>
-      <div id="tab-replay"   class="panel"></div>
+      <div id="tab-species" class="panel"></div>
+      <div id="tab-world" class="panel"></div>
+      <div id="tab-replay" class="panel"></div>
       <div id="tab-validation" class="panel"></div>
     </main>
 

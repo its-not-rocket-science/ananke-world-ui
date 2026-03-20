@@ -1,200 +1,309 @@
-// src/scenario-builder.ts — Phase 1: Scenario Builder
-//
-// Lets users pick two archetypes and weapons, then run a fight via the
-// Ananke simulation kernel.  Shows the winner and fight duration.
-//
-// Ananke imports used:
-//   - createWorld()     — deterministic WorldState from EntitySpec[]
-//   - stepWorld()       — advances simulation one tick
-//   - ARCHETYPE_MAP     — available archetype keys
-//   - ITEM_MAP          — available weapon/armour item keys
-//   - KernelContext     — minimal context for stepWorld
-//   - Entity (via WorldState.entities)
+import { escapeHtml, worldBlueprintToJson } from "./data.js";
+import type { PanelContext } from "./app-types.js";
+import type { StandingRule, WorldLocation, WorldPolity } from "./models.js";
 
-import {
-  createWorld,
-  stepWorld,
-  ARCHETYPE_MAP,
-  ITEM_MAP,
-} from "@its-not-rocket-science/ananke";
-import { q } from "@its-not-rocket-science/ananke";
+export function mountScenarioBuilder(host: HTMLElement, context: PanelContext): void {
+  const render = () => {
+    const world = context.getState().world;
+    const polityCards = world.polities
+      .map(
+        (polity) => `
+          <article class="mini-card">
+            <div class="mini-card__title">
+              <span class="swatch" style="background:${escapeHtml(polity.color)}"></span>
+              <strong>${escapeHtml(polity.name)}</strong>
+            </div>
+            <div class="kv-grid compact">
+              <span>ID</span><span>${escapeHtml(polity.id)}</span>
+              <span>Population</span><span>${polity.population.toLocaleString()}</span>
+              <span>Treasury</span><span>${polity.treasury.toLocaleString()} cu</span>
+              <span>Position</span><span>${polity.x}, ${polity.y}</span>
+            </div>
+            <button data-action="remove-polity" data-id="${escapeHtml(polity.id)}">Remove</button>
+          </article>`,
+      )
+      .join("");
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+    const locationCards = world.locations
+      .map(
+        (location) => `
+          <article class="mini-card">
+            <div class="mini-card__title"><strong>${escapeHtml(location.name)}</strong></div>
+            <div class="kv-grid compact">
+              <span>Terrain</span><span>${escapeHtml(location.terrain)}</span>
+              <span>Owner</span><span>${escapeHtml(location.polityId ?? "Unclaimed")}</span>
+              <span>Links</span><span>${escapeHtml(location.linkedTo.join(", ") || "—")}</span>
+              <span>Position</span><span>${location.x}, ${location.y}</span>
+            </div>
+            <button data-action="remove-location" data-id="${escapeHtml(location.id)}">Remove</button>
+          </article>`,
+      )
+      .join("");
 
-const MAX_TICKS = 2000;
+    const standingRows = world.standings
+      .map(
+        (standing, index) => `
+          <tr>
+            <td>${escapeHtml(standing.a)}</td>
+            <td>${escapeHtml(standing.b)}</td>
+            <td><span class="pill">${escapeHtml(standing.relation)}</span></td>
+            <td><button data-action="remove-standing" data-index="${index}">Remove</button></td>
+          </tr>`,
+      )
+      .join("");
 
-// KernelContext is not in the root barrel (v0.1.3); use Parameters<> to extract it.
-type KernelContext = Parameters<typeof stepWorld>[2];
+    host.innerHTML = `
+      <section class="panel-shell">
+        <div class="panel-header">
+          <div>
+            <h2>World Builder</h2>
+            <p class="subtitle">Shape the campaign graph, place polities on the map, and define the diplomatic starting state that the rest of the app consumes.</p>
+          </div>
+          <div class="header-actions">
+            <button class="primary" id="wb-seed-apply">Randomize seed</button>
+            <button id="wb-open-sim">Open in Sim Runner</button>
+          </div>
+        </div>
 
-// Minimal KernelContext: traction on firm ground, no terrain or weather modifiers.
-const CTX: KernelContext = {
-  tractionCoeff: q(0.85),
-};
+        <div class="two-col-layout">
+          <div class="stack-lg">
+            <div class="card">
+              <h3>Map canvas</h3>
+              <svg viewBox="0 0 480 280" class="map-canvas">
+                ${renderLinks(world.locations)}
+                ${world.locations
+                  .map(
+                    (location) => `<g>
+                      <circle cx="${location.x}" cy="${location.y}" r="11" fill="${escapeHtml(findPolityColor(world.polities, location.polityId) ?? "#334155")}" stroke="#e2e8f0" stroke-width="1.5"></circle>
+                      <text x="${location.x + 14}" y="${location.y + 4}" fill="#e2e8f0" font-size="11">${escapeHtml(location.name)}</text>
+                    </g>`,
+                  )
+                  .join("")}
+              </svg>
+              <p class="hint">Locations are draggable in the roadmap spec; this reference build uses numeric coordinates for determinism and easy export.</p>
+            </div>
 
-// Human-readable labels for a curated subset of archetypes
-const ARCHETYPE_OPTIONS: { key: string; label: string }[] = [
-  { key: "KNIGHT_INFANTRY",  label: "Knight (Infantry)"    },
-  { key: "PRO_BOXER",        label: "Pro Boxer"             },
-  { key: "AMATEUR_BOXER",    label: "Amateur Boxer"         },
-  { key: "GRECO_WRESTLER",   label: "Greco Wrestler"        },
-  { key: "HUMAN_BASE",       label: "Human (Base)"          },
-  { key: "ORC",              label: "Orc"                   },
-  { key: "ELF",              label: "Elf"                   },
-  { key: "DWARF",            label: "Dwarf"                 },
-  { key: "TROLL",            label: "Troll"                 },
-  { key: "GOBLIN",           label: "Goblin"                },
-];
+            <div class="card">
+              <h3>Polities</h3>
+              <div class="three-up">
+                <label><span>Name</span><input id="wb-polity-name" type="text" value="New polity" /></label>
+                <label><span>ID</span><input id="wb-polity-id" type="text" value="new-polity" /></label>
+                <label><span>Color</span><input id="wb-polity-color" type="text" value="#f59e0b" /></label>
+                <label><span>Population</span><input id="wb-polity-population" type="number" value="5000" /></label>
+                <label><span>Treasury</span><input id="wb-polity-treasury" type="number" value="2000" /></label>
+                <label><span>HQ position</span><input id="wb-polity-position" type="text" value="240,140" /></label>
+              </div>
+              <button class="primary" id="wb-add-polity">Add polity</button>
+              <div class="card-grid">${polityCards || `<p class="empty-state">No polities yet.</p>`}</div>
+            </div>
+          </div>
 
-// Curated weapon options (keys must exist in ITEM_MAP)
-const WEAPON_OPTIONS: { key: string; label: string }[] = [
-  { key: "fist",         label: "Fists (unarmed)"   },
-  { key: "longsword",    label: "Longsword"          },
-  { key: "shortsword",   label: "Shortsword"         },
-  { key: "dagger",       label: "Dagger"             },
-  { key: "spear",        label: "Spear"              },
-  { key: "mace",         label: "Mace"               },
-  { key: "greataxe",     label: "Greataxe"           },
-];
+          <div class="stack-lg">
+            <div class="card">
+              <h3>Locations & edges</h3>
+              <div class="three-up">
+                <label><span>Name</span><input id="wb-location-name" type="text" value="New crossing" /></label>
+                <label><span>ID</span><input id="wb-location-id" type="text" value="new-crossing" /></label>
+                <label><span>Terrain</span><input id="wb-location-terrain" type="text" value="road" /></label>
+                <label><span>Position</span><input id="wb-location-position" type="text" value="240,140" /></label>
+                <label><span>Owner polity</span><input id="wb-location-owner" type="text" value="" placeholder="optional polity id" /></label>
+                <label><span>Links</span><input id="wb-location-links" type="text" value="" placeholder="comma-separated ids" /></label>
+              </div>
+              <button class="primary" id="wb-add-location">Add location</button>
+              <div class="card-grid">${locationCards || `<p class="empty-state">No locations yet.</p>`}</div>
+            </div>
 
-// Filter to only options that are actually in ITEM_MAP (guards against version drift)
-const VALID_WEAPON_OPTIONS = WEAPON_OPTIONS.filter((w) => ITEM_MAP.has(w.key));
-const VALID_ARCHETYPE_OPTIONS = ARCHETYPE_OPTIONS.filter((a) =>
-  ARCHETYPE_MAP.has(a.key),
-);
+            <div class="card">
+              <h3>Faction standings</h3>
+              <div class="three-up">
+                <label><span>Polity A</span><input id="wb-standing-a" type="text" value="${escapeHtml(world.polities[0]?.id ?? "")}" /></label>
+                <label><span>Polity B</span><input id="wb-standing-b" type="text" value="${escapeHtml(world.polities[1]?.id ?? "")}" /></label>
+                <label><span>Relation</span>
+                  <select id="wb-standing-relation">
+                    <option value="ally">ally</option>
+                    <option value="neutral">neutral</option>
+                    <option value="rival" selected>rival</option>
+                    <option value="war">war</option>
+                  </select>
+                </label>
+              </div>
+              <button class="primary" id="wb-add-standing">Add standing</button>
+              <table class="data-table">
+                <thead><tr><th>A</th><th>B</th><th>Relation</th><th></th></tr></thead>
+                <tbody>${standingRows || `<tr><td colspan="4" class="empty-cell">No standing rules yet.</td></tr>`}</tbody>
+              </table>
+            </div>
 
-// ── UI rendering ──────────────────────────────────────────────────────────────
+            <div class="card">
+              <h3>Export</h3>
+              <div class="inline-fields">
+                <label><span>Scenario name</span><input id="wb-world-name" type="text" value="${escapeHtml(world.name)}" /></label>
+                <label><span>Seed</span><input id="wb-world-seed" type="number" value="${world.seed}" /></label>
+              </div>
+              <textarea class="json-output" readonly>${escapeHtml(worldBlueprintToJson(world))}</textarea>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
 
-function buildOptionElements(
-  options: { key: string; label: string }[],
-): string {
-  return options
-    .map((o) => `<option value="${o.key}">${o.label}</option>`)
-    .join("\n");
+    bindEvents(render, context);
+  };
+
+  render();
 }
 
-export function mountScenarioBuilder(host: HTMLElement): void {
-  const archetypeOpts = buildOptionElements(VALID_ARCHETYPE_OPTIONS);
-  const weaponOpts = buildOptionElements(VALID_WEAPON_OPTIONS);
+function bindEvents(render: () => void, context: PanelContext): void {
+  const host = document;
+  host.getElementById("wb-add-polity")?.addEventListener("click", () => {
+    context.updateState((state) => {
+      const name = valueOf("wb-polity-name");
+      const id = slugOf(valueOf("wb-polity-id"));
+      const color = valueOf("wb-polity-color") || "#f59e0b";
+      const population = numberOf("wb-polity-population", 5000);
+      const treasury = numberOf("wb-polity-treasury", 2000);
+      const [x, y] = pairOf("wb-polity-position", 240, 140);
+      if (!id) return;
+      const polity: WorldPolity = { id, name: name || id, color, population, treasury, x, y };
+      state.world.polities = [...state.world.polities.filter((item) => item.id !== id), polity];
+    });
+    render();
+  });
 
-  host.innerHTML = `
-    <h2>Scenario Builder</h2>
-    <p class="subtitle">
-      Pick two fighters, arm them, and run a fight.
-      The simulation runs ${MAX_TICKS} ticks deterministically in the browser.
-    </p>
+  host.getElementById("wb-add-location")?.addEventListener("click", () => {
+    context.updateState((state) => {
+      const name = valueOf("wb-location-name");
+      const id = slugOf(valueOf("wb-location-id"));
+      const terrain = valueOf("wb-location-terrain") || "road";
+      const polityId = valueOf("wb-location-owner");
+      const linkedTo = valueOf("wb-location-links")
+        .split(",")
+        .map((item) => slugOf(item))
+        .filter(Boolean);
+      const [x, y] = pairOf("wb-location-position", 240, 140);
+      if (!id) return;
+      const location: WorldLocation = {
+        id,
+        name: name || id,
+        terrain,
+        linkedTo,
+        x,
+        y,
+        ...(polityId ? { polityId } : {}),
+      };
+      state.world.locations = [...state.world.locations.filter((item) => item.id !== id), location];
+    });
+    render();
+  });
 
-    <div class="card">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
-        <div>
-          <label>Fighter A — Archetype</label>
-          <select id="sb-arch-a">${archetypeOpts}</select>
-          <label>Fighter A — Weapon</label>
-          <select id="sb-wpn-a">${weaponOpts}</select>
-        </div>
-        <div>
-          <label>Fighter B — Archetype</label>
-          <select id="sb-arch-b">${archetypeOpts}</select>
-          <label>Fighter B — Weapon</label>
-          <select id="sb-wpn-b">${weaponOpts}</select>
-        </div>
-      </div>
+  host.getElementById("wb-add-standing")?.addEventListener("click", () => {
+    context.updateState((state) => {
+      const standing: StandingRule = {
+        a: slugOf(valueOf("wb-standing-a")),
+        b: slugOf(valueOf("wb-standing-b")),
+        relation: (valueOf("wb-standing-relation") as StandingRule["relation"]) || "neutral",
+      };
+      if (!standing.a || !standing.b) return;
+      state.world.standings = [...state.world.standings, standing];
+    });
+    render();
+  });
 
-      <label style="margin-top:0.5rem">World seed</label>
-      <input type="number" id="sb-seed" value="42" style="width:120px" />
+  host.getElementById("wb-seed-apply")?.addEventListener("click", () => {
+    context.updateState((state) => {
+      state.world.seed = Math.floor(Math.random() * 100000);
+    });
+    render();
+  });
 
-      <div style="margin-top:0.75rem">
-        <button class="primary" id="sb-run">Run Fight</button>
-      </div>
+  host.getElementById("wb-open-sim")?.addEventListener("click", () => {
+    const worldNameInput = document.getElementById("wb-world-name") as HTMLInputElement | null;
+    const worldSeedInput = document.getElementById("wb-world-seed") as HTMLInputElement | null;
+    context.updateState((state) => {
+      if (worldNameInput?.value) state.world.name = worldNameInput.value;
+      if (worldSeedInput?.value) state.world.seed = Number.parseInt(worldSeedInput.value, 10) || state.world.seed;
+    });
+    context.navigate("world");
+  });
 
-      <div class="output" id="sb-output">Results will appear here.</div>
+  document.querySelectorAll<HTMLElement>("[data-action='remove-polity']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.dataset.id;
+      context.updateState((state) => {
+        state.world.polities = state.world.polities.filter((item) => item.id !== id);
+        state.world.locations = state.world.locations.map((location) =>
+          location.polityId === id ? { ...location, polityId: undefined as never } : location,
+        ).map((location) => {
+          if (location.polityId !== undefined) return location;
+          const { polityId: _ignored, ...rest } = location as WorldLocation & { polityId?: string };
+          return rest as WorldLocation;
+        });
+        state.world.standings = state.world.standings.filter((standing) => standing.a !== id && standing.b !== id);
+      });
+      render();
+    });
+  });
 
-      <!-- TODO Phase 1: live tick-by-tick animation using requestAnimationFrame -->
-      <!-- Each frame would advance one tick, update a canvas/SVG overlay,      -->
-      <!-- and yield to the event loop so the UI stays responsive.              -->
-    </div>
-  `;
+  document.querySelectorAll<HTMLElement>("[data-action='remove-location']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.dataset.id;
+      context.updateState((state) => {
+        state.world.locations = state.world.locations
+          .filter((item) => item.id !== id)
+          .map((location) => ({ ...location, linkedTo: location.linkedTo.filter((link) => link !== id) }));
+      });
+      render();
+    });
+  });
 
-  // Default fighter B to a different archetype if possible
-  const selectB = host.querySelector<HTMLSelectElement>("#sb-arch-b");
-  if (selectB && VALID_ARCHETYPE_OPTIONS.length > 1) {
-    selectB.value = VALID_ARCHETYPE_OPTIONS[1]?.key ?? selectB.value;
-  }
-
-  host.querySelector("#sb-run")?.addEventListener("click", () => {
-    runFight(host);
+  document.querySelectorAll<HTMLElement>("[data-action='remove-standing']").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number.parseInt(button.dataset.index ?? "-1", 10);
+      context.updateState((state) => {
+        state.world.standings = state.world.standings.filter((_, itemIndex) => itemIndex !== index);
+      });
+      render();
+    });
   });
 }
 
-function runFight(host: HTMLElement): void {
-  const archA = (host.querySelector<HTMLSelectElement>("#sb-arch-a"))?.value ?? "KNIGHT_INFANTRY";
-  const archB = (host.querySelector<HTMLSelectElement>("#sb-arch-b"))?.value ?? "PRO_BOXER";
-  const wpnA  = (host.querySelector<HTMLSelectElement>("#sb-wpn-a"))?.value ?? "longsword";
-  const wpnB  = (host.querySelector<HTMLSelectElement>("#sb-wpn-b"))?.value ?? "fist";
-  const seed  = parseInt(
-    (host.querySelector<HTMLInputElement>("#sb-seed"))?.value ?? "42",
-    10,
-  );
-
-  const output = host.querySelector<HTMLElement>("#sb-output");
-  if (!output) return;
-  output.textContent = "Running…";
-
-  // Build world in the next microtask so the "Running…" message paints first
-  setTimeout(() => {
-    try {
-      const world = createWorld(isNaN(seed) ? 42 : seed, [
-        { id: 1, teamId: 1, seed: 1, archetype: archA, weaponId: wpnA },
-        { id: 2, teamId: 2, seed: 2, archetype: archB, weaponId: wpnB },
-      ]);
-
-      let tick = 0;
-      let winner = "Draw (timeout)";
-      let endedEarly = false;
-
-      for (tick = 0; tick < MAX_TICKS; tick++) {
-        // No commands — entities use autonomous AI intent derived inside stepWorld
-        stepWorld(world, new Map(), CTX);
-
-        // Check if any entity is dead or unconscious
-        const entities = world.entities;
-        const dead = entities.filter((e) => e.injury.dead || e.injury.consciousness < 0.2);
-
-        if (dead.length > 0) {
-          const survivors = entities.filter((e) => !dead.includes(e));
-          if (survivors.length > 0) {
-            const s = survivors[0];
-            winner = s
-              ? `Fighter ${s.teamId === 1 ? "A" : "B"} (${s.id === 1 ? archA : archB}) wins`
-              : "All fighters down";
-          } else {
-            winner = "Both fighters down simultaneously";
-          }
-          endedEarly = true;
-          break;
-        }
-      }
-
-      const lines: string[] = [
-        `Seed: ${seed}`,
-        `Fighter A: ${archA} with ${wpnA}`,
-        `Fighter B: ${archB} with ${wpnB}`,
-        `Ticks run: ${tick + (endedEarly ? 0 : MAX_TICKS)}`,
-        `Result: ${winner}`,
-      ];
-
-      // Append final condition snapshot for each entity
-      for (const entity of world.entities) {
-        const inj = entity.injury;
-        lines.push(
-          `  Entity ${entity.id}: shock=${inj.shock.toFixed(0)}  ` +
-          `conscious=${inj.consciousness.toFixed(0)}  ` +
-          `dead=${String(inj.dead)}`,
-        );
-      }
-
-      output.textContent = lines.join("\n");
-    } catch (err) {
-      output.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
+function renderLinks(locations: WorldLocation[]): string {
+  const seen = new Set<string>();
+  const markup: string[] = [];
+  for (const location of locations) {
+    for (const neighborId of location.linkedTo) {
+      const neighbor = locations.find((item) => item.id === neighborId);
+      if (!neighbor) continue;
+      const edgeId = [location.id, neighbor.id].sort().join("::");
+      if (seen.has(edgeId)) continue;
+      seen.add(edgeId);
+      markup.push(
+        `<line x1="${location.x}" y1="${location.y}" x2="${neighbor.x}" y2="${neighbor.y}" stroke="#475569" stroke-width="2" stroke-dasharray="6 4"></line>`,
+      );
     }
-  }, 0);
+  }
+  return markup.join("");
+}
+
+function findPolityColor(polities: WorldPolity[], polityId?: string): string | undefined {
+  return polities.find((polity) => polity.id === polityId)?.color;
+}
+
+function valueOf(id: string): string {
+  return (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null)?.value.trim() ?? "";
+}
+
+function numberOf(id: string, fallback: number): number {
+  return Number.parseInt(valueOf(id), 10) || fallback;
+}
+
+function pairOf(id: string, fallbackX: number, fallbackY: number): [number, number] {
+  const values = valueOf(id).split(",").map((item) => Number.parseInt(item.trim(), 10));
+  const left = values[0];
+  const right = values[1];
+  return [typeof left === "number" && Number.isFinite(left) ? left : fallbackX, typeof right === "number" && Number.isFinite(right) ? right : fallbackY];
+}
+
+function slugOf(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
