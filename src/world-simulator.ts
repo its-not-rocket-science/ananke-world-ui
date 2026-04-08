@@ -3,6 +3,7 @@ import { createPreviewRenderer, type PreviewRenderer } from "./bridge/three-prev
 import { escapeHtml } from "./data.js";
 import type { PanelContext } from "./app-types.js";
 import { KERNEL_CONTEXT } from "./models.js";
+import { buildProductizationBundle, parseProductizationBundle } from "./productization-bundle.js";
 import { OptionalWorldServerAdapter } from "./world-server-adapter.js";
 
 const SPEED_OPTIONS = [0.5, 1, 5, 20];
@@ -32,6 +33,7 @@ let previewRenderer: PreviewRenderer | null = null;
 const worldServer = new OptionalWorldServerAdapter();
 let worldServerModeMessage = "Multiplayer adapter idle.";
 let worldServerSessionId = "";
+let bundleStatusMessage = "No scenario bundle imported yet.";
 
 export function mountWorldSimulator(host: HTMLElement, context: PanelContext): void {
   const render = async () => {
@@ -128,6 +130,16 @@ export function mountWorldSimulator(host: HTMLElement, context: PanelContext): v
               </div>
               <button class="primary" id="sr-queue-command">Queue command for next tick</button>
               <p class="hint">Move uses direction vectors, attack targets the chosen entity, and flee issues a run command in the opposite direction.</p>
+            </div>
+
+            <div class="card">
+              <h3>Save / load / export bundle</h3>
+              <div class="button-row">
+                <button class="primary" id="sr-export-bundle">Export diagnostic bundle</button>
+                <label class="inline-upload"><span>Import bundle</span><input id="sr-import-bundle" type="file" accept=".json" /></label>
+              </div>
+              <p class="hint">Bundles include scenario config, selected roster, runner settings, and latest replay JSON (if present).</p>
+              <pre class="output tight">${escapeHtml(bundleStatusMessage)}</pre>
             </div>
 
             <div class="card">
@@ -275,6 +287,43 @@ function bindEvents(host: HTMLElement, context: PanelContext, rerender: () => Pr
 
   host.querySelector("#sr-open-replay")?.addEventListener("click", () => {
     context.navigate("replay");
+  });
+
+  host.querySelector("#sr-export-bundle")?.addEventListener("click", () => {
+    const state = context.getState();
+    const bundle = buildProductizationBundle(state);
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const download = document.createElement("a");
+    const slug = slugify(state.world.name || "scenario");
+    download.href = url;
+    download.download = `${slug}-bundle-${Date.now()}.json`;
+    download.click();
+    URL.revokeObjectURL(url);
+    bundleStatusMessage = `Exported schema ${bundle.schemaVersion} bundle for "${state.world.name}" at ${bundle.exportedAt}.`;
+    void rerender();
+  });
+
+  host.querySelector<HTMLInputElement>("#sr-import-bundle")?.addEventListener("change", async (event) => {
+    const file = (event.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    try {
+      const bundle = parseProductizationBundle(await file.text());
+      context.updateState((state) => {
+        state.world = bundle.scenario.world;
+        state.entities = bundle.scenario.entities;
+        state.sim = bundle.scenario.sim;
+        state.latestReplayJson = bundle.replay?.replayJson ?? "";
+        state.latestReplayName = bundle.replay?.name ?? "";
+      });
+      activeSession = null;
+      clearRunTimer();
+      bundleStatusMessage = `Imported ${file.name} (schema ${bundle.schemaVersion}, exported ${bundle.exportedAt}).`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      bundleStatusMessage = `Import failed: ${message}`;
+    }
+    void rerender();
   });
 
   host.querySelector("#sr-load-preview")?.addEventListener("click", async () => {
@@ -443,4 +492,13 @@ function toEntitySpec(entity: { teamId: number; seed: number; archetype: string;
     weaponId: entity.weaponId ?? "wpn_boxing_gloves",
     ...(entity.armourId ? { armourId: entity.armourId } : {}),
   };
+}
+
+function slugify(value: string): string {
+  const next = value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return next || "scenario";
 }
