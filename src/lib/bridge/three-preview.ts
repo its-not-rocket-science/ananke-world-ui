@@ -23,7 +23,8 @@ export async function createPreviewRenderer(host: HTMLElement): Promise<PreviewR
   host.innerHTML = '<div class="muted">Loading 3D preview bridge…</div>';
 
   try {
-    const bridgeModule = await import(/* @vite-ignore */ 'ananke-threejs-bridge');
+    const bridgeSpecifier = 'ananke-threejs-bridge';
+    const bridgeModule = await import(/* @vite-ignore */ bridgeSpecifier);
     if (typeof bridgeModule.createPreviewRenderer === 'function') {
       return bridgeModule.createPreviewRenderer(host);
     }
