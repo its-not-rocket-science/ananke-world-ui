@@ -9,15 +9,7 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "skipLibCheck": true,
-    "strict": true,
-    "paths": {
-      "@its-not-rocket-science/ananke/polity": [
-        "./node_modules/@its-not-rocket-science/ananke/dist/src/polity.d.ts"
-      ],
-      "@its-not-rocket-science/ananke/dist/src/polity.js": [
-        "./node_modules/@its-not-rocket-science/ananke/dist/src/polity.d.ts"
-      ]
-    }
+    "strict": true
   },
   "include": [
     "src/**/*.d.ts",
