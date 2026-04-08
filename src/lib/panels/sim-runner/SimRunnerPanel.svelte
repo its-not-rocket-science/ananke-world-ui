@@ -13,6 +13,11 @@
     type CommandLike,
     type SimulationSession,
   } from '$lib/sim/sim-runner';
+  import {
+    buildProductizationBundle,
+    parseProductizationBundle,
+    type ProductizationBundle,
+  } from '$lib/sim/productization-bundle';
 
   const initial = get(appState);
 
@@ -27,6 +32,7 @@
   let commandTargetId = 1;
   let direction = '1,0';
   let intensity = 10000;
+  let bundleStatusMessage = 'No scenario bundle imported yet.';
 
   function syncSimulationConfig() {
     appState.update((state) => ({
@@ -96,6 +102,53 @@
   function reset() {
     pause();
     session = null;
+  }
+
+  function exportBundle() {
+    const state = get(appState);
+    const bundle = buildProductizationBundle(state);
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+    const link = document.createElement('a');
+    const worldSlug = state.world.name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-');
+    link.href = URL.createObjectURL(blob);
+    link.download = `ananke-bundle-${worldSlug || 'scenario'}-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    bundleStatusMessage = `Exported bundle at ${bundle.exportedAt} (${bundle.replay ? 'includes replay' : 'scenario only'}).`;
+  }
+
+  async function importBundle(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const parsed = parseProductizationBundle(await file.text());
+      applyBundle(parsed);
+      bundleStatusMessage = `Imported ${file.name} · schema ${parsed.schemaVersion} · exported ${new Date(parsed.exportedAt).toLocaleString()}.`;
+      reset();
+    } catch (error) {
+      bundleStatusMessage = `Import failed: ${error instanceof Error ? error.message : 'Unknown error.'}`;
+    } finally {
+      input.value = '';
+    }
+  }
+
+  function applyBundle(bundle: ProductizationBundle) {
+    appState.update((state) => ({
+      ...state,
+      world: structuredClone(bundle.scenario.world),
+      entities: structuredClone(bundle.scenario.entities),
+      sim: structuredClone(bundle.scenario.sim),
+      latestReplayJson: bundle.replay?.replayJson ?? '',
+      latestReplayName: bundle.replay?.name ?? '',
+    }));
+
+    worldSeed = bundle.scenario.world.seed;
+    maxTicks = bundle.scenario.sim.maxTicks;
+    speed = bundle.scenario.sim.speed;
   }
 
   function queueCommand() {
@@ -290,6 +343,19 @@
       <div class="card">
         <h3>Session log</h3>
         <pre class="log">{session ? session.log.slice(-18).join('\n') : 'Build a session to start logging ticks.'}</pre>
+      </div>
+
+      <div class="card">
+        <h3>Save / load / export bundle</h3>
+        <div class="button-row">
+          <button class="primary" on:click={exportBundle}>Export diagnostic bundle</button>
+          <label class="inline-upload"
+            ><span>Import bundle</span>
+            <input type="file" accept=".json" on:change={importBundle} /></label
+          >
+        </div>
+        <p class="hint">Bundles include scenario config, selected roster, runner settings, and latest replay JSON.</p>
+        <pre class="log">{bundleStatusMessage}</pre>
       </div>
     </div>
 
